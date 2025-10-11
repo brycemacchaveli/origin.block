@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/blockchain-financial-platform/fabric-chaincode/shared"
@@ -82,6 +83,10 @@ func (t *CustomerChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Respon
 		return t.UpdateConsent(stub, args)
 	case "GetConsent":
 		return t.GetConsent(stub, args)
+	case "PerformKYCValidation":
+		return t.PerformKYCValidation(stub, args)
+	case "PerformAMLCheck":
+		return t.PerformAMLCheck(stub, args)
 	case "ping":
 		return shim.Success([]byte("pong"))
 	default:
@@ -174,6 +179,43 @@ func (t *CustomerChaincode) CreateCustomer(stub shim.ChaincodeStubInterface, arg
 		Version:            1,
 	}
 
+	// Perform automatic AML screening during customer creation
+	amlRequest := AMLCheckRequest{
+		CustomerID:  customerID,
+		FirstName:   firstName,
+		LastName:    lastName,
+		NationalID:  hashedNationalID,
+		DateOfBirth: dateOfBirth.Format("2006-01-02"),
+		Country:     t.extractCountryFromAddress(address),
+	}
+
+	amlResponse, err := t.performAMLScreening(stub, amlRequest)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Automatic AML screening failed: %v", err))
+	}
+
+	// Update customer AML status based on screening results
+	customer.AMLStatus = amlResponse.Status
+
+	// If customer is blocked, prevent creation
+	if amlResponse.Status == string(shared.AMLStatusBlocked) {
+		return shim.Error(fmt.Sprintf("Customer creation blocked due to AML screening: customer appears on sanction list"))
+	}
+
+	// Store AML check record
+	amlRecordKey := fmt.Sprintf("AML_RECORD_%s_%s", customerID, shared.GenerateID("AML"))
+	if err := shared.PutStateAsJSON(stub, amlRecordKey, amlResponse); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to store AML record: %v", err))
+	}
+
+	// Create compliance event if customer is flagged
+	if amlResponse.Status == string(shared.AMLStatusFlagged) {
+		if err := t.createComplianceEvent(stub, customerID, "AML_FLAG_ON_CREATION", fmt.Sprintf("Customer flagged during creation AML screening: risk score %.2f", amlResponse.RiskScore), actorID); err != nil {
+			// Log error but don't fail the transaction
+			fmt.Printf("Warning: Failed to create compliance event: %v", err)
+		}
+	}
+
 	// Store customer in ledger
 	if err := shared.PutStateAsJSON(stub, customerID, customer); err != nil {
 		return shim.Error(fmt.Sprintf("Failed to store customer: %v", err))
@@ -226,6 +268,15 @@ func (t *CustomerChaincode) UpdateCustomerDetails(stub shim.ChaincodeStubInterfa
 	var existingCustomer Customer
 	if err := shared.GetStateAsJSON(stub, customerID, &existingCustomer); err != nil {
 		return shim.Error(fmt.Sprintf("Customer not found: %v", err))
+	}
+
+	// Validate customer compliance status before allowing updates
+	if err := t.ValidateCustomerForCompliance(stub, customerID); err != nil {
+		// Allow updates for compliance officers even if customer is flagged
+		actor, actorErr := shared.ValidateActorAccess(stub, actorID, shared.PermissionUpdateCompliance)
+		if actorErr != nil || actor.Role != shared.RoleComplianceOfficer {
+			return shim.Error(fmt.Sprintf("Customer update blocked due to compliance issues: %v", err))
+		}
 	}
 
 	// Validate field formats
@@ -680,6 +731,442 @@ func (t *CustomerChaincode) GetConsent(stub shim.ChaincodeStubInterface, args []
 	}
 
 	return shim.Success(consentJSON)
+}
+
+// ============================================================================
+// KYC/AML VALIDATION FUNCTIONS
+// ============================================================================
+
+// SanctionListEntry represents an entry in the sanction list
+type SanctionListEntry struct {
+	Name        string `json:"name"`
+	NationalID  string `json:"nationalID"`
+	DateOfBirth string `json:"dateOfBirth"`
+	Country     string `json:"country"`
+	ListType    string `json:"listType"` // "OFAC", "UN", "EU", etc.
+}
+
+// KYCValidationRequest represents a request for KYC validation
+type KYCValidationRequest struct {
+	CustomerID   string `json:"customerID"`
+	FirstName    string `json:"firstName"`
+	LastName     string `json:"lastName"`
+	DateOfBirth  string `json:"dateOfBirth"`
+	NationalID   string `json:"nationalID"`
+	Address      string `json:"address"`
+	DocumentType string `json:"documentType"`
+	DocumentHash string `json:"documentHash"`
+}
+
+// KYCValidationResponse represents the response from KYC validation
+type KYCValidationResponse struct {
+	CustomerID       string    `json:"customerID"`
+	ValidationStatus string    `json:"validationStatus"` // "VERIFIED", "FAILED", "PENDING"
+	ProviderName     string    `json:"providerName"`
+	ValidationDate   time.Time `json:"validationDate"`
+	ConfidenceScore  float64   `json:"confidenceScore"`
+	FailureReasons   []string  `json:"failureReasons"`
+	ReferenceID      string    `json:"referenceID"`
+}
+
+// AMLCheckRequest represents a request for AML screening
+type AMLCheckRequest struct {
+	CustomerID  string `json:"customerID"`
+	FirstName   string `json:"firstName"`
+	LastName    string `json:"lastName"`
+	NationalID  string `json:"nationalID"`
+	DateOfBirth string `json:"dateOfBirth"`
+	Country     string `json:"country"`
+}
+
+// AMLCheckResponse represents the response from AML screening
+type AMLCheckResponse struct {
+	CustomerID     string                `json:"customerID"`
+	Status         string                `json:"status"` // "CLEAR", "FLAGGED", "BLOCKED"
+	CheckDate      time.Time             `json:"checkDate"`
+	Matches        []SanctionListEntry   `json:"matches"`
+	RiskScore      float64               `json:"riskScore"`
+	ProviderName   string                `json:"providerName"`
+	ReferenceID    string                `json:"referenceID"`
+}
+
+// PerformKYCValidation performs KYC validation for a customer
+func (t *CustomerChaincode) PerformKYCValidation(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Validate arguments
+	if len(args) != 2 {
+		return shim.Error("Incorrect number of arguments. Expecting 2: customerID, actorID")
+	}
+
+	customerID := args[0]
+	actorID := args[1]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionUpdateCustomer)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Get existing customer
+	var customer Customer
+	if err := shared.GetStateAsJSON(stub, customerID, &customer); err != nil {
+		return shim.Error(fmt.Sprintf("Customer not found: %v", err))
+	}
+
+	// Create KYC validation request
+	kycRequest := KYCValidationRequest{
+		CustomerID:   customerID,
+		FirstName:    customer.FirstName,
+		LastName:     customer.LastName,
+		DateOfBirth:  customer.DateOfBirth.Format("2006-01-02"),
+		NationalID:   customer.NationalID, // This is already hashed
+		Address:      customer.Address,
+		DocumentType: "NATIONAL_ID",
+		DocumentHash: shared.HashString(customer.NationalID),
+	}
+
+	// Simulate external KYC provider integration
+	kycResponse, err := t.integrateWithKYCProvider(stub, kycRequest)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("KYC validation failed: %v", err))
+	}
+
+	// Update customer KYC status based on response
+	previousKYCStatus := customer.KYCStatus
+	customer.KYCStatus = kycResponse.ValidationStatus
+	customer.LastUpdated = time.Now()
+	customer.UpdatedByActor = actorID
+	customer.Version++
+
+	// Record history entry
+	if err := shared.RecordHistoryEntry(stub, customerID, "Customer", "UPDATE", "kycStatus", previousKYCStatus, customer.KYCStatus, actorID); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to record history: %v", err))
+	}
+
+	// Store updated customer
+	if err := shared.PutStateAsJSON(stub, customerID, customer); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to update customer: %v", err))
+	}
+
+	// Store KYC validation record
+	kycRecordKey := fmt.Sprintf("KYC_RECORD_%s_%s", customerID, shared.GenerateID("KYC"))
+	if err := shared.PutStateAsJSON(stub, kycRecordKey, kycResponse); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to store KYC record: %v", err))
+	}
+
+	// Emit KYC validation event
+	event := CustomerEvent{
+		EventType:  "KYC_VALIDATION_COMPLETED",
+		CustomerID: customerID,
+		ActorID:    actorID,
+		Timestamp:  time.Now(),
+		Details:    fmt.Sprintf("KYC validation completed with status: %s", kycResponse.ValidationStatus),
+	}
+	if err := shared.EmitEvent(stub, "KYCValidationCompleted", event); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to emit event: %v", err))
+	}
+
+	// Return KYC response
+	responseJSON, _ := json.Marshal(kycResponse)
+	return shim.Success(responseJSON)
+}
+
+// PerformAMLCheck performs AML screening for a customer
+func (t *CustomerChaincode) PerformAMLCheck(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Validate arguments
+	if len(args) != 2 {
+		return shim.Error("Incorrect number of arguments. Expecting 2: customerID, actorID")
+	}
+
+	customerID := args[0]
+	actorID := args[1]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionUpdateCustomer)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Get existing customer
+	var customer Customer
+	if err := shared.GetStateAsJSON(stub, customerID, &customer); err != nil {
+		return shim.Error(fmt.Sprintf("Customer not found: %v", err))
+	}
+
+	// Create AML check request
+	amlRequest := AMLCheckRequest{
+		CustomerID:  customerID,
+		FirstName:   customer.FirstName,
+		LastName:    customer.LastName,
+		NationalID:  customer.NationalID, // This is already hashed
+		DateOfBirth: customer.DateOfBirth.Format("2006-01-02"),
+		Country:     t.extractCountryFromAddress(customer.Address),
+	}
+
+	// Perform AML screening
+	amlResponse, err := t.performAMLScreening(stub, amlRequest)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("AML screening failed: %v", err))
+	}
+
+	// Update customer AML status based on response
+	previousAMLStatus := customer.AMLStatus
+	customer.AMLStatus = amlResponse.Status
+	customer.LastUpdated = time.Now()
+	customer.UpdatedByActor = actorID
+	customer.Version++
+
+	// Record history entry
+	if err := shared.RecordHistoryEntry(stub, customerID, "Customer", "UPDATE", "amlStatus", previousAMLStatus, customer.AMLStatus, actorID); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to record history: %v", err))
+	}
+
+	// Store updated customer
+	if err := shared.PutStateAsJSON(stub, customerID, customer); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to update customer: %v", err))
+	}
+
+	// Store AML check record
+	amlRecordKey := fmt.Sprintf("AML_RECORD_%s_%s", customerID, shared.GenerateID("AML"))
+	if err := shared.PutStateAsJSON(stub, amlRecordKey, amlResponse); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to store AML record: %v", err))
+	}
+
+	// If customer is flagged or blocked, create compliance event
+	if amlResponse.Status == string(shared.AMLStatusFlagged) || amlResponse.Status == string(shared.AMLStatusBlocked) {
+		if err := t.createComplianceEvent(stub, customerID, "AML_VIOLATION", fmt.Sprintf("Customer flagged during AML screening: %s", amlResponse.Status), actorID); err != nil {
+			// Log error but don't fail the transaction
+			fmt.Printf("Warning: Failed to create compliance event: %v", err)
+		}
+	}
+
+	// Emit AML check event
+	event := CustomerEvent{
+		EventType:  "AML_CHECK_COMPLETED",
+		CustomerID: customerID,
+		ActorID:    actorID,
+		Timestamp:  time.Now(),
+		Details:    fmt.Sprintf("AML check completed with status: %s", amlResponse.Status),
+	}
+	if err := shared.EmitEvent(stub, "AMLCheckCompleted", event); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to emit event: %v", err))
+	}
+
+	// Return AML response
+	responseJSON, _ := json.Marshal(amlResponse)
+	return shim.Success(responseJSON)
+}
+
+// integrateWithKYCProvider simulates integration with external KYC provider
+func (t *CustomerChaincode) integrateWithKYCProvider(stub shim.ChaincodeStubInterface, request KYCValidationRequest) (*KYCValidationResponse, error) {
+	// In a real implementation, this would make an API call to an external KYC provider
+	// For this simulation, we'll implement basic validation logic
+	
+	now := time.Now()
+	response := &KYCValidationResponse{
+		CustomerID:       request.CustomerID,
+		ValidationStatus: string(shared.KYCStatusPending),
+		ProviderName:     "MockKYCProvider",
+		ValidationDate:   now,
+		ConfidenceScore:  0.0,
+		FailureReasons:   []string{},
+		ReferenceID:      shared.GenerateID("KYC_REF"),
+	}
+
+	// Basic validation checks
+	validationPassed := true
+	
+	// Check required fields
+	if request.FirstName == "" || request.LastName == "" || request.NationalID == "" {
+		response.FailureReasons = append(response.FailureReasons, "Missing required fields")
+		validationPassed = false
+	}
+
+	// Check name format (basic validation)
+	if len(request.FirstName) < 2 || len(request.LastName) < 2 {
+		response.FailureReasons = append(response.FailureReasons, "Invalid name format")
+		validationPassed = false
+	}
+
+	// Check date of birth format
+	if _, err := time.Parse("2006-01-02", request.DateOfBirth); err != nil {
+		response.FailureReasons = append(response.FailureReasons, "Invalid date of birth format")
+		validationPassed = false
+	}
+
+	// Simulate document verification (in real implementation, this would verify against government databases)
+	if request.DocumentHash == "" {
+		response.FailureReasons = append(response.FailureReasons, "Document hash missing")
+		validationPassed = false
+	}
+
+	// Set validation status and confidence score
+	if validationPassed {
+		response.ValidationStatus = string(shared.KYCStatusVerified)
+		response.ConfidenceScore = 0.95 // High confidence for passed validation
+	} else {
+		response.ValidationStatus = string(shared.KYCStatusFailed)
+		response.ConfidenceScore = 0.1 // Low confidence for failed validation
+	}
+
+	return response, nil
+}
+
+// performAMLScreening performs AML screening against sanction lists
+func (t *CustomerChaincode) performAMLScreening(stub shim.ChaincodeStubInterface, request AMLCheckRequest) (*AMLCheckResponse, error) {
+	now := time.Now()
+	response := &AMLCheckResponse{
+		CustomerID:   request.CustomerID,
+		Status:       string(shared.AMLStatusClear),
+		CheckDate:    now,
+		Matches:      []SanctionListEntry{},
+		RiskScore:    0.0,
+		ProviderName: "MockAMLProvider",
+		ReferenceID:  shared.GenerateID("AML_REF"),
+	}
+
+	// Get sanction list entries (in real implementation, this would query external sanction databases)
+	sanctionEntries := t.getMockSanctionList()
+
+	// Perform name matching
+	customerFullName := fmt.Sprintf("%s %s", request.FirstName, request.LastName)
+	
+	for _, entry := range sanctionEntries {
+		// Simple name matching (in real implementation, this would use fuzzy matching algorithms)
+		if t.isNameMatch(customerFullName, entry.Name) {
+			response.Matches = append(response.Matches, entry)
+			response.RiskScore += 0.8 // High risk for name match
+		}
+		
+		// Check national ID match (if available in sanction list)
+		if entry.NationalID != "" && entry.NationalID == request.NationalID {
+			response.Matches = append(response.Matches, entry)
+			response.RiskScore += 0.9 // Very high risk for ID match
+		}
+		
+		// Check date of birth match
+		if entry.DateOfBirth != "" && entry.DateOfBirth == request.DateOfBirth {
+			response.RiskScore += 0.3 // Medium risk for DOB match
+		}
+	}
+
+	// Determine final status based on matches and risk score
+	if len(response.Matches) > 0 {
+		if response.RiskScore >= 0.8 {
+			response.Status = string(shared.AMLStatusBlocked)
+		} else {
+			response.Status = string(shared.AMLStatusFlagged)
+		}
+	} else if response.RiskScore > 0.5 {
+		response.Status = string(shared.AMLStatusReviewing)
+	} else {
+		response.Status = string(shared.AMLStatusClear)
+	}
+
+	return response, nil
+}
+
+// getMockSanctionList returns a mock sanction list for testing
+func (t *CustomerChaincode) getMockSanctionList() []SanctionListEntry {
+	// In a real implementation, this would fetch from external sanction databases
+	return []SanctionListEntry{
+		{
+			Name:        "John Doe Sanctioned",
+			NationalID:  "SANCT123456",
+			DateOfBirth: "1980-01-01",
+			Country:     "Unknown",
+			ListType:    "OFAC",
+		},
+		{
+			Name:        "Jane Smith Blocked",
+			NationalID:  "BLOCK789012",
+			DateOfBirth: "1975-05-15",
+			Country:     "Unknown",
+			ListType:    "UN",
+		},
+		{
+			Name:        "Test Flagged Person",
+			NationalID:  "FLAG345678",
+			DateOfBirth: "1990-12-25",
+			Country:     "Unknown",
+			ListType:    "EU",
+		},
+	}
+}
+
+// isNameMatch performs basic name matching
+func (t *CustomerChaincode) isNameMatch(customerName, sanctionName string) bool {
+	// Simple case-insensitive comparison
+	// In real implementation, this would use sophisticated fuzzy matching algorithms
+	customerNameLower := strings.ToLower(customerName)
+	sanctionNameLower := strings.ToLower(sanctionName)
+	
+	// Check for exact match
+	if customerNameLower == sanctionNameLower {
+		return true
+	}
+	
+	// Only match if the sanctioned name is contained in customer name (not vice versa)
+	// This prevents false positives like "John Doe" matching "John Doe Sanctioned"
+	if strings.Contains(sanctionNameLower, customerNameLower) && len(customerNameLower) >= len(sanctionNameLower)-10 {
+		return true
+	}
+	
+	return false
+}
+
+// extractCountryFromAddress extracts country from address (basic implementation)
+func (t *CustomerChaincode) extractCountryFromAddress(address string) string {
+	// In real implementation, this would use address parsing libraries
+	// For now, return a default country
+	return "US" // Default country
+}
+
+// createComplianceEvent creates a compliance event (cross-chaincode call simulation)
+func (t *CustomerChaincode) createComplianceEvent(stub shim.ChaincodeStubInterface, entityID, eventType, details, actorID string) error {
+	// In a real implementation, this would invoke the Compliance chaincode
+	// For now, we'll just log the event
+	fmt.Printf("Compliance Event: EntityID=%s, Type=%s, Details=%s, Actor=%s", entityID, eventType, details, actorID)
+	return nil
+}
+
+// ValidateCustomerForCompliance validates customer data against compliance rules
+func (t *CustomerChaincode) ValidateCustomerForCompliance(stub shim.ChaincodeStubInterface, customerID string) error {
+	// Get customer data
+	var customer Customer
+	if err := shared.GetStateAsJSON(stub, customerID, &customer); err != nil {
+		return fmt.Errorf("customer not found: %v", err)
+	}
+
+	// Check AML status first (most critical)
+	if customer.AMLStatus == string(shared.AMLStatusBlocked) {
+		return fmt.Errorf("customer is AML blocked: %s", customer.AMLStatus)
+	}
+
+	if customer.AMLStatus == string(shared.AMLStatusFlagged) {
+		return fmt.Errorf("customer is AML flagged and requires review: %s", customer.AMLStatus)
+	}
+
+	// Check KYC status - allow PENDING for basic operations, but require VERIFIED for high-risk operations
+	if customer.KYCStatus == string(shared.KYCStatusFailed) {
+		return fmt.Errorf("customer KYC verification failed: %s", customer.KYCStatus)
+	}
+
+	if customer.KYCStatus == string(shared.KYCStatusExpired) {
+		return fmt.Errorf("customer KYC verification expired: %s", customer.KYCStatus)
+	}
+
+	// Check customer status
+	if customer.Status != string(shared.CustomerStatusActive) {
+		return fmt.Errorf("customer is not active: %s", customer.Status)
+	}
+
+	// Check if customer is of legal age (already validated during creation, but double-check)
+	age := time.Now().Year() - customer.DateOfBirth.Year()
+	if age < 18 {
+		return fmt.Errorf("customer is under legal age: %d years", age)
+	}
+
+	return nil
 }
 
 // ValidateConsentForDataSharing validates if customer has given consent for specific data sharing operation
