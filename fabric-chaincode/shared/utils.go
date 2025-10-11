@@ -399,7 +399,13 @@ func RecordHistoryEntry(stub shim.ChaincodeStubInterface, entityID, entityType, 
 		TransactionID: txID,
 	}
 	
-	return PutStateAsJSON(stub, historyID, entry)
+	// Store with composite key for easy querying
+	compositeKey, err := stub.CreateCompositeKey("HISTORY", []string{entityID, historyID})
+	if err != nil {
+		return fmt.Errorf("failed to create composite key: %v", err)
+	}
+	
+	return PutStateAsJSON(stub, compositeKey, entry)
 }
 
 // GetEntityHistory retrieves all history entries for an entity
