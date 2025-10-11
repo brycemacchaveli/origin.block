@@ -72,6 +72,46 @@ type LoanApplicationHistory struct {
 	AdditionalContext  string    `json:"additionalContext,omitempty"` // Extra context for complex changes
 }
 
+// DocumentStatus represents the status of a document
+type DocumentStatus string
+
+const (
+	DocumentStatusUploaded   DocumentStatus = "Uploaded"
+	DocumentStatusVerified   DocumentStatus = "Verified"
+	DocumentStatusRejected   DocumentStatus = "Rejected"
+	DocumentStatusExpired    DocumentStatus = "Expired"
+)
+
+// DocumentType represents the type of document
+type DocumentType string
+
+const (
+	DocumentTypeIdentity     DocumentType = "Identity"
+	DocumentTypeIncome       DocumentType = "Income"
+	DocumentTypeBankStatement DocumentType = "Bank_Statement"
+	DocumentTypeCollateral   DocumentType = "Collateral"
+	DocumentTypeOther        DocumentType = "Other"
+)
+
+// LoanDocument represents a document associated with a loan application
+type LoanDocument struct {
+	DocumentID        string         `json:"documentID"`
+	LoanApplicationID string         `json:"loanApplicationID"`
+	CustomerID        string         `json:"customerID"`
+	DocumentType      DocumentType   `json:"documentType"`
+	DocumentName      string         `json:"documentName"`
+	DocumentHash      string         `json:"documentHash"`      // SHA256 hash of document content
+	HashAlgorithm     string         `json:"hashAlgorithm"`     // Always "SHA256"
+	DocumentStatus    DocumentStatus `json:"documentStatus"`
+	UploadedBy        string         `json:"uploadedBy"`
+	UploadedDate      time.Time      `json:"uploadedDate"`
+	VerifiedBy        string         `json:"verifiedBy,omitempty"`
+	VerifiedDate      time.Time      `json:"verifiedDate,omitempty"`
+	ExpiryDate        time.Time      `json:"expiryDate,omitempty"`
+	LastUpdated       time.Time      `json:"lastUpdated"`
+	Version           int            `json:"version"`
+}
+
 // LoanChaincode implements the fabric Contract interface
 type LoanChaincode struct {
 }
@@ -100,6 +140,14 @@ func (t *LoanChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Response {
 		return t.GetLoanApplication(stub, args)
 	case "GetLoanHistory":
 		return t.GetLoanHistory(stub, args)
+	case "RecordDocumentHash":
+		return t.RecordDocumentHash(stub, args)
+	case "VerifyDocumentHash":
+		return t.VerifyDocumentHash(stub, args)
+	case "GetLoanDocuments":
+		return t.GetLoanDocuments(stub, args)
+	case "UpdateDocumentStatus":
+		return t.UpdateDocumentStatus(stub, args)
 	default:
 		return shim.Error("Invalid function name: " + function)
 	}
@@ -631,6 +679,405 @@ func (t *LoanChaincode) GetLoanHistory(stub shim.ChaincodeStubInterface, args []
 	return shim.Success(responseJSON)
 }
 
+// RecordDocumentHash records a document hash for integrity verification
+func (t *LoanChaincode) RecordDocumentHash(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Expected args: [loanApplicationID, customerID, documentType, documentName, documentHash, actorID]
+	if len(args) != 6 {
+		return shim.Error("Incorrect number of arguments. Expecting 6: loanApplicationID, customerID, documentType, documentName, documentHash, actorID")
+	}
+
+	loanApplicationID := args[0]
+	customerID := args[1]
+	documentTypeStr := args[2]
+	documentName := args[3]
+	documentHash := args[4]
+	actorID := args[5]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionCreateLoan)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Validate required fields
+	requiredFields := map[string]string{
+		"loanApplicationID": loanApplicationID,
+		"customerID":        customerID,
+		"documentType":      documentTypeStr,
+		"documentName":      documentName,
+		"documentHash":      documentHash,
+		"actorID":           actorID,
+	}
+	if err := shared.ValidateRequired(requiredFields); err != nil {
+		return shim.Error(fmt.Sprintf("Validation failed: %v", err))
+	}
+
+	// Validate document type
+	documentType := DocumentType(documentTypeStr)
+	if !isValidDocumentType(documentType) {
+		return shim.Error(fmt.Sprintf("Invalid document type: %s", documentTypeStr))
+	}
+
+	// Validate document name length
+	if err := shared.ValidateStringLength(documentName, 1, 255, "documentName"); err != nil {
+		return shim.Error(fmt.Sprintf("Document name validation failed: %v", err))
+	}
+
+	// Validate document hash format (should be 64 character hex string for SHA256)
+	if len(documentHash) != 64 {
+		return shim.Error("Document hash must be 64 characters (SHA256 hex)")
+	}
+	// Validate hex format
+	for _, char := range documentHash {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return shim.Error("Document hash must be valid hexadecimal")
+		}
+	}
+
+	// Verify loan application exists
+	loanKey := "LOAN_" + loanApplicationID
+	var loanApplication LoanApplication
+	err = shared.GetStateAsJSON(stub, loanKey, &loanApplication)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to get loan application: %v", err))
+	}
+
+	// Verify customer ID matches loan application
+	if loanApplication.CustomerID != customerID {
+		return shim.Error(fmt.Sprintf("Customer ID %s does not match loan application customer %s", customerID, loanApplication.CustomerID))
+	}
+
+	// Generate unique document ID
+	documentID := shared.GenerateID("DOC")
+
+	// Create loan document record
+	loanDocument := LoanDocument{
+		DocumentID:        documentID,
+		LoanApplicationID: loanApplicationID,
+		CustomerID:        customerID,
+		DocumentType:      documentType,
+		DocumentName:      documentName,
+		DocumentHash:      documentHash,
+		HashAlgorithm:     "SHA256",
+		DocumentStatus:    DocumentStatusUploaded,
+		UploadedBy:        actorID,
+		UploadedDate:      time.Now(),
+		LastUpdated:       time.Now(),
+		Version:           1,
+	}
+
+	// Store document record
+	documentKey := "DOCUMENT_" + documentID
+	err = shared.PutStateAsJSON(stub, documentKey, loanDocument)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to store document record: %v", err))
+	}
+
+	// Create composite key for querying documents by loan application
+	compositeKey, err := stub.CreateCompositeKey("LOAN_DOCUMENTS", []string{loanApplicationID, documentID})
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to create composite key: %v", err))
+	}
+
+	// Store reference with composite key
+	err = stub.PutState(compositeKey, []byte(documentID))
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to store document reference: %v", err))
+	}
+
+	// Record history entry
+	err = shared.RecordHistoryEntry(stub, documentID, "LoanDocument", "CREATE", "status", "", string(DocumentStatusUploaded), actorID)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to record document history: %v", err))
+	}
+
+	// Emit event
+	eventPayload := map[string]interface{}{
+		"documentID":        documentID,
+		"loanApplicationID": loanApplicationID,
+		"customerID":        customerID,
+		"documentType":      documentType,
+		"documentHash":      documentHash,
+		"uploadedBy":        actorID,
+	}
+	err = shared.EmitEvent(stub, "DocumentHashRecorded", eventPayload)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to emit event: %v", err))
+	}
+
+	// Return the document record
+	documentJSON, err := json.Marshal(loanDocument)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal document record: %v", err))
+	}
+
+	return shim.Success(documentJSON)
+}
+
+// VerifyDocumentHash verifies a document against its stored hash
+func (t *LoanChaincode) VerifyDocumentHash(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Expected args: [documentID, providedHash, actorID]
+	if len(args) != 3 {
+		return shim.Error("Incorrect number of arguments. Expecting 3: documentID, providedHash, actorID")
+	}
+
+	documentID := args[0]
+	providedHash := args[1]
+	actorID := args[2]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionViewLoan)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Validate required fields
+	requiredFields := map[string]string{
+		"documentID":   documentID,
+		"providedHash": providedHash,
+		"actorID":      actorID,
+	}
+	if err := shared.ValidateRequired(requiredFields); err != nil {
+		return shim.Error(fmt.Sprintf("Validation failed: %v", err))
+	}
+
+	// Validate provided hash format
+	if len(providedHash) != 64 {
+		return shim.Error("Provided hash must be 64 characters (SHA256 hex)")
+	}
+
+	// Get document record
+	documentKey := "DOCUMENT_" + documentID
+	var loanDocument LoanDocument
+	err = shared.GetStateAsJSON(stub, documentKey, &loanDocument)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to get document record: %v", err))
+	}
+
+	// Perform hash verification
+	isValid := (loanDocument.DocumentHash == providedHash)
+
+	// Create verification result
+	verificationResult := map[string]interface{}{
+		"documentID":      documentID,
+		"isValid":         isValid,
+		"storedHash":      loanDocument.DocumentHash,
+		"providedHash":    providedHash,
+		"hashAlgorithm":   loanDocument.HashAlgorithm,
+		"verifiedBy":      actorID,
+		"verifiedAt":      time.Now(),
+		"documentName":    loanDocument.DocumentName,
+		"documentType":    loanDocument.DocumentType,
+		"uploadedBy":      loanDocument.UploadedBy,
+		"uploadedDate":    loanDocument.UploadedDate,
+	}
+
+	// Record verification attempt in history
+	verificationStatus := "FAILED"
+	if isValid {
+		verificationStatus = "PASSED"
+	}
+	
+	err = shared.RecordHistoryEntry(stub, documentID, "LoanDocument", "VERIFY", "verification", "", verificationStatus, actorID)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to record verification history: %v", err))
+	}
+
+	// Emit verification event
+	eventPayload := map[string]interface{}{
+		"documentID":        documentID,
+		"loanApplicationID": loanDocument.LoanApplicationID,
+		"isValid":           isValid,
+		"verifiedBy":        actorID,
+		"verificationStatus": verificationStatus,
+	}
+	err = shared.EmitEvent(stub, "DocumentHashVerified", eventPayload)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to emit verification event: %v", err))
+	}
+
+	// Return verification result
+	resultJSON, err := json.Marshal(verificationResult)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal verification result: %v", err))
+	}
+
+	return shim.Success(resultJSON)
+}
+
+// GetLoanDocuments retrieves all documents associated with a loan application
+func (t *LoanChaincode) GetLoanDocuments(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Expected args: [loanApplicationID, actorID]
+	if len(args) != 2 {
+		return shim.Error("Incorrect number of arguments. Expecting 2: loanApplicationID, actorID")
+	}
+
+	loanApplicationID := args[0]
+	actorID := args[1]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionViewLoan)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Verify loan application exists
+	loanKey := "LOAN_" + loanApplicationID
+	var loanApplication LoanApplication
+	err = shared.GetStateAsJSON(stub, loanKey, &loanApplication)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to get loan application: %v", err))
+	}
+
+	// Get documents using composite key
+	iterator, err := stub.GetStateByPartialCompositeKey("LOAN_DOCUMENTS", []string{loanApplicationID})
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to get documents iterator: %v", err))
+	}
+	defer iterator.Close()
+
+	var documents []LoanDocument
+	for iterator.HasNext() {
+		response, err := iterator.Next()
+		if err != nil {
+			return shim.Error(fmt.Sprintf("Failed to iterate documents: %v", err))
+		}
+
+		// Get document ID from the value
+		documentID := string(response.Value)
+		
+		// Get full document record
+		documentKey := "DOCUMENT_" + documentID
+		var document LoanDocument
+		err = shared.GetStateAsJSON(stub, documentKey, &document)
+		if err != nil {
+			return shim.Error(fmt.Sprintf("Failed to get document %s: %v", documentID, err))
+		}
+
+		documents = append(documents, document)
+	}
+
+	// Create response
+	response := map[string]interface{}{
+		"loanApplicationID": loanApplicationID,
+		"documentCount":     len(documents),
+		"documents":         documents,
+		"retrievedBy":       actorID,
+		"retrievedAt":       time.Now(),
+	}
+
+	// Emit access event
+	auditPayload := map[string]interface{}{
+		"loanApplicationID": loanApplicationID,
+		"accessedBy":        actorID,
+		"documentCount":     len(documents),
+		"accessType":        "DOCUMENT_LIST_RETRIEVAL",
+	}
+	err = shared.EmitEvent(stub, "LoanDocumentsAccessed", auditPayload)
+	if err != nil {
+		// Log but don't fail the request for audit event issues
+		fmt.Printf("Warning: Failed to emit audit event: %v", err)
+	}
+
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal documents response: %v", err))
+	}
+
+	return shim.Success(responseJSON)
+}
+
+// UpdateDocumentStatus updates the status of a document (e.g., verified, rejected)
+func (t *LoanChaincode) UpdateDocumentStatus(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Expected args: [documentID, newStatus, actorID, verificationNotes]
+	if len(args) != 4 {
+		return shim.Error("Incorrect number of arguments. Expecting 4: documentID, newStatus, actorID, verificationNotes")
+	}
+
+	documentID := args[0]
+	newStatusStr := args[1]
+	actorID := args[2]
+	verificationNotes := args[3]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionUpdateLoan)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Validate new status
+	newStatus := DocumentStatus(newStatusStr)
+	if !isValidDocumentStatus(newStatus) {
+		return shim.Error(fmt.Sprintf("Invalid document status: %s", newStatusStr))
+	}
+
+	// Get existing document
+	documentKey := "DOCUMENT_" + documentID
+	var loanDocument LoanDocument
+	err = shared.GetStateAsJSON(stub, documentKey, &loanDocument)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to get document: %v", err))
+	}
+
+	// Store previous status for history
+	previousStatus := loanDocument.DocumentStatus
+
+	// Validate status transition
+	if !isValidDocumentStatusTransition(previousStatus, newStatus) {
+		return shim.Error(fmt.Sprintf("Invalid status transition from %s to %s", previousStatus, newStatus))
+	}
+
+	// Update document
+	loanDocument.DocumentStatus = newStatus
+	loanDocument.LastUpdated = time.Now()
+	loanDocument.Version++
+
+	// Set verification details if status is verified
+	if newStatus == DocumentStatusVerified {
+		loanDocument.VerifiedBy = actorID
+		loanDocument.VerifiedDate = time.Now()
+	}
+
+	// Store updated document
+	err = shared.PutStateAsJSON(stub, documentKey, loanDocument)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to update document: %v", err))
+	}
+
+	// Record history entry
+	contextMsg := fmt.Sprintf("Status updated from %s to %s", previousStatus, newStatus)
+	if verificationNotes != "" {
+		contextMsg += fmt.Sprintf(" - Notes: %s", verificationNotes)
+	}
+	
+	err = shared.RecordHistoryEntry(stub, documentID, "LoanDocument", "UPDATE", "status", string(previousStatus), string(newStatus), actorID)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to record history: %v", err))
+	}
+
+	// Emit event
+	eventPayload := map[string]interface{}{
+		"documentID":        documentID,
+		"loanApplicationID": loanDocument.LoanApplicationID,
+		"previousStatus":    previousStatus,
+		"newStatus":         newStatus,
+		"updatedBy":         actorID,
+		"verificationNotes": verificationNotes,
+	}
+	err = shared.EmitEvent(stub, "DocumentStatusUpdated", eventPayload)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to emit event: %v", err))
+	}
+
+	// Return updated document
+	documentJSON, err := json.Marshal(loanDocument)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal document: %v", err))
+	}
+
+	return shim.Success(documentJSON)
+}
+
 // recordLoanHistoryEntry creates a detailed history entry specific to loan applications
 func (t *LoanChaincode) recordLoanHistoryEntry(stub shim.ChaincodeStubInterface, loanApplicationID, changeType, fieldName, previousValue, newValue, actorID string, version int, additionalContext string) error {
 	// Use the shared utility for basic history recording
@@ -798,6 +1245,57 @@ func sortHistoryByTimestamp(history []LoanApplicationHistory) {
 			}
 		}
 	}
+}
+
+// isValidDocumentType checks if the document type is valid
+func isValidDocumentType(docType DocumentType) bool {
+	validTypes := []DocumentType{
+		DocumentTypeIdentity, DocumentTypeIncome, DocumentTypeBankStatement,
+		DocumentTypeCollateral, DocumentTypeOther,
+	}
+	for _, validType := range validTypes {
+		if docType == validType {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidDocumentStatus checks if the document status is valid
+func isValidDocumentStatus(status DocumentStatus) bool {
+	validStatuses := []DocumentStatus{
+		DocumentStatusUploaded, DocumentStatusVerified,
+		DocumentStatusRejected, DocumentStatusExpired,
+	}
+	for _, validStatus := range validStatuses {
+		if status == validStatus {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidDocumentStatusTransition checks if a document status transition is valid
+func isValidDocumentStatusTransition(currentStatus, newStatus DocumentStatus) bool {
+	// Define valid transitions
+	validTransitions := map[DocumentStatus][]DocumentStatus{
+		DocumentStatusUploaded: {DocumentStatusVerified, DocumentStatusRejected, DocumentStatusExpired},
+		DocumentStatusVerified: {DocumentStatusExpired}, // Verified documents can only expire
+		DocumentStatusRejected: {DocumentStatusUploaded}, // Rejected documents can be re-uploaded
+		DocumentStatusExpired:  {DocumentStatusUploaded}, // Expired documents can be re-uploaded
+	}
+
+	allowedTransitions, exists := validTransitions[currentStatus]
+	if !exists {
+		return false
+	}
+
+	for _, allowedStatus := range allowedTransitions {
+		if newStatus == allowedStatus {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
