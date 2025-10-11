@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<title>Stitch Design</title>
+<link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+<script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary": "#0f66bd",
+            "background-light": "#f6f7f8",
+            "background-dark": "#101922",
+          },
+          fontFamily: {
+            "display": ["Manrope"]
+          },
+          borderRadius: {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "full": "9999px"
+          },
+        },
+      },
+    }
+  </script>
+<style>
+    .form-select {
+        background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+        background-position: right 0.5rem center;
+        background-repeat: no-repeat;
+        background-size: 1.5em 1.5em;
+        padding-right: 2.5rem;
+        -webkit-print-color-adjust: exact;
+        color-adjust: exact;
+    }
+  </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display">
+<div class="flex flex-col min-h-screen">
+<header class="flex items-center justify-between whitespace-nowrap border-b border-white/10 dark:border-white/10 px-10 py-4 text-white">
+<div class="flex items-center gap-4">
+<div class="w-8 h-8 text-primary">
+<svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><path clip-rule="evenodd" d="M12.0799 24L4 19.2479L9.95537 8.75216L18.04 13.4961L18.0446 4H29.9554L29.96 13.4961L38.0446 8.75216L44 19.2479L35.92 24L44 28.7521L38.0446 39.2479L29.96 34.5039L29.9554 44H18.0446L18.04 34.5039L9.95537 39.2479L4 28.7521L12.0799 24Z" fill="currentColor" fill-rule="evenodd"></path></svg>
+</div>
+<h2 class="text-lg font-bold text-black dark:text-white">LedgerLink</h2>
+</div>
+<nav class="hidden md:flex items-center gap-8">
+<a class="text-sm font-medium text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white" href="#">Dashboard</a>
+<a class="text-sm font-medium text-black dark:text-white" href="#">Applications</a>
+<a class="text-sm font-medium text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white" href="#">Reports</a>
+<a class="text-sm font-medium text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white" href="#">Compliance</a>
+</nav>
+<div class="flex items-center gap-4">
+<button class="p-2 rounded-full text-black/60 dark:text-white/60 hover:bg-black/5 dark:hover:bg-white/5">
+<span class="material-symbols-outlined">
+            notifications
+          </span>
+</button>
+<div class="w-10 h-10 rounded-full bg-cover bg-center" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuCA-0y6Tw0BLdjhQjJ_rCqJk3a3QAQZTOI015voJruunJWgfhFU_vcVAjzr8vM_Uj-iCHauOSiergSiLkBlitVtK3b9Sl53xFmoztFOsziayGW1E3QYrL3qqtcgwYtTfW55TDj-WtDZuwDYIHE8Kq6lbmEftUoMBcQg-pZA85GWDZQ3Jit11OXKDNI9hAVjUlJ3QzalbHCoj8lj6MpA2sT1s-KQHRjso2sdyiIwa9QK1HOohc-jCHiOemWdH35i4Sni7mG_yWlxJATX');"></div>
+</div>
+</header>
+<main class="flex-grow flex items-center justify-center py-12 px-4">
+<div class="w-full max-w-2xl mx-auto">
+<div class="mb-8 text-center">
+<h1 class="text-3xl font-bold text-black dark:text-white">Update Loan Application Status</h1>
+<p class="text-black/60 dark:text-white/60 mt-2">Application ID: LA-2024-00789</p>
+</div>
+<div class="bg-white/5 dark:bg-white/5 p-6 rounded-lg mb-8">
+<div class="flex justify-between items-center mb-4">
+<h2 class="text-xl font-bold text-black dark:text-white">Application Summary</h2>
+<a class="flex items-center gap-2 text-sm text-primary hover:underline" href="#">
+<span class="material-symbols-outlined text-base">history</span>
+<span>View History</span>
+</a>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-y-4 gap-x-8 text-sm">
+<div class="flex justify-between border-b border-black/10 dark:border-white/10 py-3">
+<span class="text-black/60 dark:text-white/60">Applicant Name</span>
+<span class="font-medium text-black dark:text-white">Sophia Carter</span>
+</div>
+<div class="flex justify-between border-b border-black/10 dark:border-white/10 py-3">
+<span class="text-black/60 dark:text-white/60">Loan Amount</span>
+<span class="font-medium text-black dark:text-white">$500,000</span>
+</div>
+<div class="flex justify-between border-b border-black/10 dark:border-white/10 py-3">
+<span class="text-black/60 dark:text-white/60">Application Date</span>
+<span class="font-medium text-black dark:text-white">2024-07-26</span>
+</div>
+<div class="flex justify-between border-b border-black/10 dark:border-white/10 py-3">
+<span class="text-black/60 dark:text-white/60">Current Status</span>
+<span class="font-medium text-black dark:text-white">Under Review</span>
+</div>
+</div>
+</div>
+<div>
+<h2 class="text-xl font-bold text-black dark:text-white mb-4">Status Update</h2>
+<div class="space-y-6">
+<div>
+<label class="block text-sm font-medium text-black/60 dark:text-white/60 mb-2" for="status">New Status</label>
+<select class="form-select w-full bg-white/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg text-black dark:text-white focus:ring-primary focus:border-primary" id="status">
+<option>Pending Underwriting</option>
+<option>Approved</option>
+<option>Rejected</option>
+</select>
+</div>
+<div>
+<label class="block text-sm font-medium text-black/60 dark:text-white/60 mb-2" for="comments">Comments (Optional)</label>
+<textarea class="w-full bg-white/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg text-black dark:text-white placeholder-black/40 dark:placeholder-white/40 focus:ring-primary focus:border-primary" id="comments" placeholder="Add notes for the record..." rows="4"></textarea>
+</div>
+<div class="flex justify-end pt-2">
+<button class="flex items-center justify-center gap-2 bg-primary text-white font-bold py-3 px-6 rounded-lg hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-background-light dark:focus:ring-offset-background-dark focus:ring-primary">
+<span class="material-symbols-outlined text-base">
+                        shield_lock
+                    </span>
+<span>Sign and Update Status</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

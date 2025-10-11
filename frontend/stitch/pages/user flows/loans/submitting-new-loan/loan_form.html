@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Stitch Design</title>
+<link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#0f66bd",
+              "background-light": "#f6f7f8",
+              "background-dark": "#101922",
+            },
+            fontFamily: {
+              display: ["Manrope"],
+            },
+            borderRadius: {
+              DEFAULT: "0.25rem",
+              lg: "0.5rem",
+              xl: "0.75rem",
+              full: "9999px",
+            },
+          },
+        },
+      };
+    </script>
+<style>
+      .form-input.peer:not(:placeholder-shown) + .form-label,
+      .form-input.peer:focus + .form-label {
+        transform: translateY(-1.5rem) scale(0.75);
+        color: #0f66bd;
+      }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display text-[#111418] dark:text-[#f6f7f8]">
+<div class="flex min-h-screen w-full flex-col">
+<header class="sticky top-0 z-10 flex items-center justify-between border-b border-background-dark/10 bg-background-light/80 px-10 py-3 backdrop-blur-sm dark:border-background-light/10 dark:bg-background-dark/80">
+<div class="flex items-center gap-4">
+<div class="text-primary h-8 w-8">
+<svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+<path d="M24 4C25.7818 14.2173 33.7827 22.2182 44 24C33.7827 25.7818 25.7818 33.7827 24 44C22.2182 33.7827 14.2173 25.7818 4 24C14.2173 22.2182 22.2182 14.2173 24 4Z" fill="currentColor"></path>
+</svg>
+</div>
+<h2 class="text-lg font-bold">Blockchain Finance</h2>
+</div>
+<nav class="hidden items-center gap-8 md:flex">
+<a class="text-sm font-medium hover:text-primary" href="#">Dashboard</a>
+<a class="text-sm font-medium text-primary" href="#">Loans</a>
+<a class="text-sm font-medium hover:text-primary" href="#">Customers</a>
+<a class="text-sm font-medium hover:text-primary" href="#">Compliance</a>
+</nav>
+<div class="flex items-center gap-4">
+<button class="flex h-10 w-10 items-center justify-center rounded-full bg-background-light hover:bg-primary/10 dark:bg-background-dark dark:hover:bg-primary/20">
+<span class="material-symbols-outlined"> notifications </span>
+</button>
+<div class="aspect-square h-10 w-10 rounded-full bg-cover bg-center bg-no-repeat" style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuBy4Qoyafdk48wY9uREQJwk2Mnq265cMAJA-qUWhhb1yaf7LO88jc8D_ZXDkZMbti0u4dym7k9g-G9kiJoLKJne1GAcjj4NANQPFdqTmv6197vGCayIGmtIumkAkxSV7pqfEviYezD7OslvlhLeAtAIeV-sHBLyu2u9k30ZvwuF5oqifWtEATcLNaSWMvN6tQOrN43qTaz_3kwDvwgGZ4AfQzXJJG9c5oQOPDAHZFSffv22KsxXPoHcMtSxg8SDwkN2158TsGZoPFmD");'></div>
+</div>
+</header>
+<main class="flex flex-1 justify-center py-10">
+<div class="w-full max-w-2xl px-4">
+<div class="mb-8 text-center">
+<h1 class="text-4xl font-bold tracking-tighter">New Loan Application</h1>
+<p class="mt-2 text-[#111418]/60 dark:text-[#f6f7f8]/60">
+              Please fill out the form below to submit a new loan application. Ensure all fields are accurately completed to avoid delays.
+            </p>
+</div>
+<div class="mb-8">
+<div class="relative w-full h-1 bg-background-dark/10 dark:bg-background-light/10 rounded-full">
+<div class="absolute top-0 left-0 h-1 bg-primary rounded-full" style="width: 25%;"></div>
+<div class="absolute w-full flex justify-between -top-2.5">
+<div class="flex flex-col items-center">
+<div class="w-6 h-6 rounded-full bg-primary border-4 border-background-light dark:border-background-dark flex items-center justify-center">
+<div class="w-2 h-2 rounded-full bg-white dark:bg-background-light"></div>
+</div>
+<span class="mt-2 text-xs font-semibold text-primary">Core Details</span>
+</div>
+<div class="flex flex-col items-center">
+<div class="w-6 h-6 rounded-full bg-background-dark/20 dark:bg-background-light/20 border-4 border-background-light dark:border-background-dark"></div>
+<span class="mt-2 text-xs font-medium text-[#111418]/60 dark:text-[#f6f7f8]/60">Documents</span>
+</div>
+<div class="flex flex-col items-center">
+<div class="w-6 h-6 rounded-full bg-background-dark/20 dark:bg-background-light/20 border-4 border-background-light dark:border-background-dark"></div>
+<span class="mt-2 text-xs font-medium text-[#111418]/60 dark:text-[#f6f7f8]/60">Review</span>
+</div>
+<div class="flex flex-col items-center">
+<div class="w-6 h-6 rounded-full bg-background-dark/20 dark:bg-background-light/20 border-4 border-background-light dark:border-background-dark"></div>
+<span class="mt-2 text-xs font-medium text-[#111418]/60 dark:text-[#f6f7f8]/60">Confirm</span>
+</div>
+</div>
+</div>
+</div>
+<form class="space-y-8">
+<div class="space-y-4 rounded-xl border border-background-dark/10 bg-background-light p-6 shadow-sm dark:border-background-light/10 dark:bg-background-dark/50">
+<h3 class="text-xl font-semibold">Borrower Information</h3>
+<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+<div class="relative">
+<input class="form-input peer h-14 w-full rounded-lg border-2 border-background-dark/10 bg-transparent p-4 outline-none transition-colors focus:border-primary dark:border-background-light/10" id="fullName" placeholder=" "/>
+<label class="form-label pointer-events-none absolute left-4 top-4 origin-left transform text-[#111418]/60 transition-all dark:text-[#f6f7f8]/60" for="fullName">Full Name</label>
+</div>
+<div class="relative">
+<input class="form-input peer h-14 w-full rounded-lg border-2 border-background-dark/10 bg-transparent p-4 outline-none transition-colors focus:border-primary dark:border-background-light/10" id="email" placeholder=" " type="email"/>
+<label class="form-label pointer-events-none absolute left-4 top-4 origin-left transform text-[#111418]/60 transition-all dark:text-[#f6f7f8]/60" for="email">Email Address</label>
+</div>
+<div class="relative">
+<input class="form-input peer h-14 w-full rounded-lg border-2 border-background-dark/10 bg-transparent p-4 outline-none transition-colors focus:border-primary dark:border-background-light/10" id="phone" placeholder=" " type="tel"/>
+<label class="form-label pointer-events-none absolute left-4 top-4 origin-left transform text-[#111418]/60 transition-all dark:text-[#f6f7f8]/60" for="phone">Phone Number</label>
+</div>
+<div class="relative">
+<input class="form-input peer h-14 w-full rounded-lg border-2 border-background-dark/10 bg-transparent p-4 outline-none transition-colors focus:border-primary dark:border-background-light/10" id="address" placeholder=" "/>
+<label class="form-label pointer-events-none absolute left-4 top-4 origin-left transform text-[#111418]/60 transition-all dark:text-[#f6f7f8]/60" for="address">Address</label>
+</div>
+</div>
+</div>
+<div class="space-y-4 rounded-xl border border-background-dark/10 bg-background-light p-6 shadow-sm dark:border-background-light/10 dark:bg-background-dark/50">
+<h3 class="text-xl font-semibold">Loan Details</h3>
+<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+<div class="relative">
+<input class="form-input peer h-14 w-full rounded-lg border-2 border-background-dark/10 bg-transparent p-4 outline-none transition-colors focus:border-primary dark:border-background-light/10" id="loanAmount" placeholder=" " type="number"/>
+<label class="form-label pointer-events-none absolute left-4 top-4 origin-left transform text-[#111418]/60 transition-all dark:text-[#f6f7f8]/60" for="loanAmount">Loan Amount</label>
+</div>
+<div class="relative">
+<input class="form-input peer h-14 w-full rounded-lg border-2 border-background-dark/10 bg-transparent p-4 outline-none transition-colors focus:border-primary dark:border-background-light/10" id="loanPurpose" placeholder=" "/>
+<label class="form-label pointer-events-none absolute left-4 top-4 origin-left transform text-[#111418]/60 transition-all dark:text-[#f6f7f8]/60" for="loanPurpose">Loan Purpose</label>
+</div>
+<div class="relative col-span-1 sm:col-span-2">
+<select class="form-input h-14 w-full appearance-none rounded-lg border-2 border-background-dark/10 bg-transparent p-4 outline-none transition-colors focus:border-primary dark:border-background-light/10" id="loanType">
+<option class="bg-background-light dark:bg-background-dark" value="">Select loan type</option>
+<option class="bg-background-light dark:bg-background-dark" value="personal">Personal Loan</option>
+<option class="bg-background-light dark:bg-background-dark" value="mortgage">Mortgage</option>
+<option class="bg-background-light dark:bg-background-dark" value="auto">Auto Loan</option>
+</select>
+<span class="material-symbols-outlined pointer-events-none absolute right-4 top-1/2 -translate-y-1/2"> expand_more </span>
+</div>
+</div>
+</div>
+<div class="space-y-4 rounded-xl border border-background-dark/10 bg-background-light p-6 shadow-sm dark:border-background-light/10 dark:bg-background-dark/50">
+<h3 class="text-xl font-semibold">Supporting Documents</h3>
+<div class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-background-dark/20 p-14 text-center dark:border-background-light/20">
+<span class="material-symbols-outlined text-4xl text-[#111418]/60 dark:text-[#f6f7f8]/60"> cloud_upload </span>
+<p class="mt-4 font-semibold">Upload Documents</p>
+<p class="mt-1 text-sm text-[#111418]/60 dark:text-[#f6f7f8]/60">
+                  Drag and drop files here, or click to browse.
+                </p>
+<button class="mt-6 rounded-lg bg-primary/10 px-4 py-2 text-sm font-bold text-primary transition-colors hover:bg-primary/20 dark:bg-primary/20 dark:hover:bg-primary/30" type="button">Browse Files</button>
+</div>
+</div>
+<div class="space-y-4 rounded-xl border border-background-dark/10 bg-background-light p-6 shadow-sm dark:border-background-light/10 dark:bg-background-dark/50">
+<h3 class="text-xl font-semibold">Confirmation</h3>
+<div class="space-y-3">
+<label class="flex items-start gap-x-3">
+<input class="mt-1 h-5 w-5 flex-shrink-0 rounded border-background-dark/30 bg-transparent text-primary focus:ring-primary dark:border-background-light/30" type="checkbox"/>
+<span class="text-sm">I confirm that all information provided is accurate and complete.</span>
+</label>
+<label class="flex items-start gap-x-3">
+<input class="mt-1 h-5 w-5 flex-shrink-0 rounded border-background-dark/30 bg-transparent text-primary focus:ring-primary dark:border-background-light/30" type="checkbox"/>
+<span class="text-sm">I have reviewed the terms and conditions of the loan application.</span>
+</label>
+<label class="flex items-start gap-x-3">
+<input class="mt-1 h-5 w-5 flex-shrink-0 rounded border-background-dark/30 bg-transparent text-primary focus:ring-primary dark:border-background-light/30" type="checkbox"/>
+<span class="text-sm">I understand that submitting this application does not guarantee loan approval.</span>
+</label>
+</div>
+</div>
+<div>
+<button class="w-full rounded-lg bg-primary py-4 text-center font-bold text-white transition-opacity hover:opacity-90" type="submit">
+                Submit Application
+              </button>
+</div>
+</form>
+</div>
+</main>
+</div>
+</body></html>

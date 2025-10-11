@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Audit Trail</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#0f66bd",
+              "background-light": "#f6f7f8",
+              "background-dark": "#101922",
+            },
+            fontFamily: {
+              display: ["Manrope"],
+            },
+            borderRadius: { DEFAULT: "0.25rem", lg: "0.5rem", xl: "0.75rem", full: "9999px" },
+          },
+        },
+      };
+    </script>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display">
+<div class="flex flex-col min-h-screen">
+<header class="flex items-center justify-between whitespace-nowrap border-b border-primary/20 dark:border-primary/30 px-6 sm:px-10 py-4">
+<div class="flex items-center gap-4 text-gray-800 dark:text-white">
+<span class="material-symbols-outlined text-primary text-3xl"> account_balance </span>
+<h1 class="text-xl font-bold">AuditTrail</h1>
+</div>
+<div class="hidden md:flex items-center gap-6">
+<a class="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-primary" href="#">Dashboard</a>
+<a class="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-primary" href="#">Loan Applications</a>
+<a class="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-primary" href="#">Compliance</a>
+</div>
+<div class="flex items-center gap-4">
+<button class="p-2 rounded-full hover:bg-primary/10 dark:hover:bg-primary/20 text-gray-600 dark:text-gray-300">
+<span class="material-symbols-outlined"> notifications </span>
+</button>
+<div class="w-10 h-10 rounded-full bg-cover bg-center" style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuBeSXTjkSuHGuM84wAspQqlYih13EXoq8WRRxaUtyhMnI7fRFt3Rqy8MvR-wiRETBH8F8ODBUPMWcfo03a-e2XdZzvxsZXRbvspE10ehsGu39zlbYdxV7oVhY7nJUTfJjDG3ZF9a0U9D7kq5MDKX2WhSEUp8Bc8jZ5btXkfxwLdyVCnuOhBX9YZ8W-rjVjsuOH_KXV4kx9Ys2Bv3VoonSSv64pvzdgdVviAp-_fYXz88ckQtcb2awA9JQ3P4cMdnHMdvjkDKdeoA9Qw");'></div>
+</div>
+</header>
+<main class="flex-grow container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="max-w-5xl mx-auto">
+<div class="text-center mb-12">
+<h2 class="text-4xl font-extrabold text-gray-900 dark:text-white mb-3">Loan Application Audit Trail</h2>
+<p class="text-lg text-gray-600 dark:text-gray-400">Enter the Loan Application ID to retrieve the complete, verifiable audit history.</p>
+</div>
+<div class="relative mb-8">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500"> search </span>
+<input class="w-full h-14 pl-12 pr-4 bg-white dark:bg-background-dark border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-all" placeholder="Enter Loan Application ID (e.g., LA-2024-00123)" type="text"/>
+</div>
+<div class="flex items-center justify-end mb-4">
+<div class="relative" x-data="{ open: false }">
+<button @click="open = !open" class="flex items-center gap-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-primary dark:hover:text-primary">
+<span class="material-symbols-outlined text-xl"> filter_list </span>
+                    Filter by Event Type
+                    <span class="material-symbols-outlined text-xl" x-bind:class="{ 'rotate-180': open }"> expand_more </span></button>
+<div @click.away="open = false" class="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 z-10" style="display: none;" x-show="open">
+<div class="p-4 space-y-3">
+<label class="flex items-center space-x-3 cursor-pointer">
+<input class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-primary focus:ring-primary bg-gray-100 dark:bg-gray-700" type="checkbox"/>
+<span class="text-sm text-gray-700 dark:text-gray-300">Data Changes</span>
+</label>
+<label class="flex items-center space-x-3 cursor-pointer">
+<input class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-primary focus:ring-primary bg-gray-100 dark:bg-gray-700" type="checkbox"/>
+<span class="text-sm text-gray-700 dark:text-gray-300">Status Updates</span>
+</label>
+<label class="flex items-center space-x-3 cursor-pointer">
+<input class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-primary focus:ring-primary bg-gray-100 dark:bg-gray-700" type="checkbox"/>
+<span class="text-sm text-gray-700 dark:text-gray-300">Document Hashes</span>
+</label>
+<label class="flex items-center space-x-3 cursor-pointer">
+<input class="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-primary focus:ring-primary bg-gray-100 dark:bg-gray-700" type="checkbox"/>
+<span class="text-sm text-gray-700 dark:text-gray-300">Compliance Events</span>
+</label>
+</div>
+</div>
+</div>
+</div>
+<div class="bg-white dark:bg-background-dark shadow-sm rounded-xl border border-gray-200 dark:border-gray-800">
+<div class="flex items-center justify-between p-4 sm:p-6 border-b border-gray-200 dark:border-gray-800">
+<h3 class="text-lg font-semibold text-gray-800 dark:text-white">Audit History for LA-2024-00123</h3>
+<button class="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:bg-opacity-90 transition-colors">
+<span class="material-symbols-outlined text-base"> download </span>
+                Export Report
+              </button>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+<thead class="text-xs text-gray-700 dark:text-gray-300 uppercase bg-gray-50 dark:bg-gray-900/50">
+<tr>
+<th class="px-6 py-4 font-medium tracking-wider" scope="col">Timestamp</th>
+<th class="px-6 py-4 font-medium tracking-wider" scope="col">Event</th>
+<th class="px-6 py-4 font-medium tracking-wider" scope="col">Details</th>
+<th class="px-6 py-4 font-medium tracking-wider" scope="col">Hash</th>
+</tr>
+</thead>
+<tbody>
+<tr class="bg-white dark:bg-background-dark border-b dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
+<td class="px-6 py-4 whitespace-nowrap">2024-03-15 10:00 AM</td>
+<td class="px-6 py-4 font-medium text-gray-900 dark:text-white">Application Submitted</td>
+<td class="px-6 py-4">Applicant: Amelia Harper, Amount: $500,000</td>
+<td class="px-6 py-4 font-mono text-xs">0xabc...def</td>
+</tr>
+<tr class="bg-white dark:bg-background-dark border-b dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
+<td class="px-6 py-4 whitespace-nowrap">2024-03-15 11:30 AM</td>
+<td class="px-6 py-4 font-medium text-gray-900 dark:text-white">Document Uploaded</td>
+<td class="px-6 py-4">Document: Income Verification</td>
+<td class="px-6 py-4 font-mono text-xs">0x123...456</td>
+</tr>
+<tr class="bg-white dark:bg-background-dark border-b dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
+<td class="px-6 py-4 whitespace-nowrap">2024-03-16 02:00 PM</td>
+<td class="px-6 py-4 font-medium text-gray-900 dark:text-white">Compliance Check</td>
+<td class="px-6 py-4">Status: Passed, Auditor: Ethan Carter</td>
+<td class="px-6 py-4 font-mono text-xs">0x789...abc</td>
+</tr>
+<tr class="bg-white dark:bg-background-dark border-b dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
+<td class="px-6 py-4 whitespace-nowrap">2024-03-17 09:00 AM</td>
+<td class="px-6 py-4 font-medium text-gray-900 dark:text-white">Loan Approved</td>
+<td class="px-6 py-4">Approver: Sophia Bennett, Rate: 4.5%</td>
+<td class="px-6 py-4 font-mono text-xs">0xdef...123</td>
+</tr>
+<tr class="bg-white dark:bg-background-dark hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
+<td class="px-6 py-4 whitespace-nowrap">2024-03-18 04:00 PM</td>
+<td class="px-6 py-4 font-medium text-gray-900 dark:text-white">Loan Disbursed</td>
+<td class="px-6 py-4">Transaction ID: 0x456...789</td>
+<td class="px-6 py-4 font-mono text-xs">0x456...789</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</main>
+</div>
+<script defer="" src="https://cdn.jsdelivr.net/gh/alpinejs/alpine@v2.x.x/dist/alpine.min.js"></script>
+</body></html>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<title>ChainTrust - Application History</title>
+<link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect"/>
+<link as="style" href="https://fonts.googleapis.com/css2?display=swap&amp;family=Manrope:wght@400;500;700;800" onload="this.rel='stylesheet'" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+<script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary": "#0f66bd",
+            "background-light": "#f6f7f8",
+            "background-dark": "#101922",
+          },
+          fontFamily: {
+            "display": ["Manrope"]
+          },
+          borderRadius: {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "full": "9999px"
+          },
+        },
+      },
+    }
+  </script>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display text-gray-800 dark:text-gray-200">
+<div class="flex flex-col min-h-screen">
+<header class="flex items-center justify-between whitespace-nowrap border-b border-gray-200 dark:border-gray-700/50 px-6 sm:px-10 py-3">
+<div class="flex items-center gap-4">
+<div class="w-8 h-8 text-primary">
+<svg fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 1.99999L22 7V17L12 22L2 17V7L12 1.99999ZM12 4.24999L4 8.5V15.5L12 19.75L20 15.5V8.5L12 4.24999ZM11 10H13V15H11V10ZM11 16H13V18H11V16Z"></path></svg>
+</div>
+<h2 class="text-lg font-bold text-gray-900 dark:text-white">ChainTrust</h2>
+</div>
+<nav class="hidden md:flex items-center gap-8">
+<a class="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-primary" href="#">Dashboard</a>
+<a class="text-sm font-medium text-primary dark:text-primary" href="#">Applications</a>
+<a class="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-primary" href="#">Customers</a>
+<a class="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-primary dark:hover:text-primary" href="#">Compliance</a>
+</nav>
+<div class="flex items-center gap-4">
+<button class="flex items-center justify-center rounded-full h-10 w-10 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary">
+<span class="material-symbols-outlined text-2xl">
+            notifications
+          </span>
+</button>
+<div class="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-10" style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuCV6V8LtKlsuGLwc3RWbczjsC_dOSE0RKNVL6UI7CZ823XgK5eXLs2F_qNdBeF0lBTLDm-MnubdXkkqy9YFXdAaUykpcgL8omFvLgFTDLfUgIFOMooSTa_2cXVM0zUVwgmq1p5jdzD_mYWZtps1obV2Rt3-fOvqJw6Boq2NEhnDCKGZRI5gzQWTGddmk2xVVZXbEpIoBtuAUI1QgWSZefS-aKP0t2sMLPK0eLTbTNOTJTDhg73WJL-ak9HBvIVhcc87J2H_SxBddrzU");'></div>
+</div>
+</header>
+<main class="flex-grow w-full max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
+<div class="flex flex-col gap-8">
+<div>
+<h1 class="text-3xl font-bold text-gray-900 dark:text-white">Application History</h1>
+<p class="mt-1 text-gray-600 dark:text-gray-400">View the complete, immutable history of a loan application.</p>
+</div>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500">
+            search
+          </span>
+<input class="w-full pl-12 pr-4 py-3 rounded-lg bg-gray-100 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700/50 focus:ring-2 focus:ring-primary focus:border-primary transition-colors text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500" placeholder="Search by Application ID (e.g., APP-2024-00123)" type="text"/>
+</div>
+<div class="bg-white dark:bg-gray-800/30 border border-gray-200 dark:border-gray-700/50 rounded-lg shadow-sm">
+<div class="p-6 border-b border-gray-200 dark:border-gray-700/50">
+<h3 class="text-lg font-bold text-gray-900 dark:text-white">Application Summary</h3>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-px bg-gray-200 dark:bg-gray-700/50">
+<div class="p-4 bg-background-light dark:bg-background-dark">
+<p class="text-sm text-gray-500 dark:text-gray-400">Application ID</p>
+<p class="font-medium text-gray-800 dark:text-gray-200">APP-2024-00123</p>
+</div>
+<div class="p-4 bg-background-light dark:bg-background-dark">
+<p class="text-sm text-gray-500 dark:text-gray-400">Applicant Name</p>
+<p class="font-medium text-gray-800 dark:text-gray-200">Sophia Carter</p>
+</div>
+<div class="p-4 bg-background-light dark:bg-background-dark">
+<p class="text-sm text-gray-500 dark:text-gray-400">Loan Amount</p>
+<p class="font-medium text-gray-800 dark:text-gray-200">$500,000</p>
+</div>
+<div class="p-4 bg-background-light dark:bg-background-dark">
+<p class="text-sm text-gray-500 dark:text-gray-400">Application Date</p>
+<p class="font-medium text-gray-800 dark:text-gray-200">2024-07-26</p>
+</div>
+<div class="p-4 bg-background-light dark:bg-background-dark">
+<p class="text-sm text-gray-500 dark:text-gray-400">Status</p>
+<p class="font-medium text-green-600 dark:text-green-400">Approved</p>
+</div>
+<div class="p-4 bg-background-light dark:bg-background-dark">
+<p class="text-sm text-gray-500 dark:text-gray-400">Underwriter</p>
+<p class="font-medium text-gray-800 dark:text-gray-200">Ethan Bennett</p>
+</div>
+</div>
+</div>
+<div>
+<div class="flex items-center justify-between mb-4">
+<h3 class="text-lg font-bold text-gray-900 dark:text-white">Immutable History Log</h3>
+<div class="flex items-center gap-2">
+<div class="relative">
+<select class="pl-4 pr-10 py-2 text-sm rounded-md bg-gray-100 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700/50 focus:ring-2 focus:ring-primary focus:border-primary transition-colors text-gray-600 dark:text-gray-300 appearance-none">
+<option>All Events</option>
+<option>Status Changes</option>
+<option>Document Uploads</option>
+<option>Data Updates</option>
+<option>Comments</option>
+</select>
+<span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 pointer-events-none">
+                expand_more
+            </span>
+</div>
+<div class="relative" x-data="{ open: false }">
+<button @click="open = !open" class="flex items-center gap-2 text-sm rounded-md bg-gray-100 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700/50 px-3 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700/60 transition-colors">
+<span class="material-symbols-outlined text-lg">
+                    ios_share
+                  </span>
+<span>Export</span>
+</button>
+<div @click.away="open = false" class="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10" style="display: none;" x-show="open">
+<a class="flex items-center gap-3 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50" href="#">
+<span class="material-symbols-outlined text-base">picture_as_pdf</span>
+<span>Export as PDF</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50" href="#">
+<span class="material-symbols-outlined text-base">description</span>
+<span>Export as CSV</span>
+</a>
+</div>
+</div>
+</div>
+</div>
+<div class="relative pl-8">
+<div class="absolute left-3.5 top-0 h-full w-0.5 bg-gray-200 dark:bg-gray-700/50"></div>
+<div class="relative mb-8">
+<div class="absolute -left-[34px] top-1 flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 dark:bg-primary/20 ring-4 ring-background-light dark:ring-background-dark">
+<span class="material-symbols-outlined text-primary text-base">description</span>
+</div>
+<p class="font-medium text-gray-800 dark:text-gray-200">Application Submitted</p>
+<p class="text-sm text-gray-500 dark:text-gray-400">by <span class="font-medium text-gray-700 dark:text-gray-300">Sophia Carter</span> at 2024-07-26 09:15:32 UTC</p>
+</div>
+<div class="relative mb-8">
+<div class="absolute -left-[34px] top-1 flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 dark:bg-primary/20 ring-4 ring-background-light dark:ring-background-dark">
+<span class="material-symbols-outlined text-primary text-base">policy</span>
+</div>
+<p class="font-medium text-gray-800 dark:text-gray-200">Credit Check Initiated</p>
+<p class="text-sm text-gray-500 dark:text-gray-400">by <span class="font-medium text-gray-700 dark:text-gray-300">System</span> at 2024-07-26 09:16:01 UTC</p>
+</div>
+<div class="relative mb-8">
+<div class="absolute -left-[34px] top-1 flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 dark:bg-primary/20 ring-4 ring-background-light dark:ring-background-dark">
+<span class="material-symbols-outlined text-primary text-base">fact_check</span>
+</div>
+<p class="font-medium text-gray-800 dark:text-gray-200">Financial Review Completed</p>
+<p class="text-sm text-gray-500 dark:text-gray-400">by <span class="font-medium text-gray-700 dark:text-gray-300">Ethan Bennett</span> at 2024-07-27 14:30:11 UTC</p>
+</div>
+<div class="relative mb-8">
+<div class="absolute -left-[34px] top-1 flex h-7 w-7 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/50 ring-4 ring-background-light dark:ring-background-dark">
+<span class="material-symbols-outlined text-green-600 dark:text-green-400 text-base">done</span>
+</div>
+<p class="font-medium text-gray-800 dark:text-gray-200">Application Approved</p>
+<p class="text-sm text-gray-500 dark:text-gray-400">by <span class="font-medium text-gray-700 dark:text-gray-300">Ethan Bennett</span> at 2024-07-28 10:05:45 UTC</p>
+</div>
+<div class="relative">
+<div class="absolute -left-[34px] top-1 flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 dark:bg-primary/20 ring-4 ring-background-light dark:ring-background-dark">
+<span class="material-symbols-outlined text-primary text-base">account_balance</span>
+</div>
+<p class="font-medium text-gray-800 dark:text-gray-200">Loan Originated</p>
+<p class="text-sm text-gray-500 dark:text-gray-400">by <span class="font-medium text-gray-700 dark:text-gray-300">System</span> at 2024-07-29 11:00:00 UTC</p>
+</div>
+</div>
+</div>
+<div class="flex items-center justify-center mt-4 gap-2 text-sm text-gray-500 dark:text-gray-400">
+<span class="material-symbols-outlined text-base">lock</span>
+<p>Immutable record. All changes are permanently logged on the blockchain.</p>
+</div>
+</div>
+</main>
+</div>
+<script defer="" src="https://cdn.jsdelivr.net/gh/alpinejs/alpine@v2.x.x/dist/alpine.min.js"></script>
+</body></html>
