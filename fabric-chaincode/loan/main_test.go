@@ -594,3 +594,478 @@ func TestIsValidStatusTransition(t *testing.T) {
 		t.Error("Expected transition from Disbursed to Rejected to be invalid")
 	}
 }
+
+// ============================================================================
+// HISTORY TRACKING TESTS
+// ============================================================================
+
+func TestGetLoanHistory_Success(t *testing.T) {
+	cc := new(LoanChaincode)
+	stub := shimtest.NewMockStub("loan", cc)
+	setupTestEnvironment(stub)
+
+	// Create a loan application and perform several operations to generate history
+	loanApp := createTestLoanApplication(t, stub, cc)
+	
+	// Progress through multiple status changes
+	progressToUnderwriting(t, stub, cc, loanApp.LoanApplicationID)
+	
+	// Progress to credit review
+	updateArgs := [][]byte{
+		[]byte("UpdateStatus"),
+		[]byte(loanApp.LoanApplicationID),
+		[]byte("Credit_Review"),
+		[]byte("test-underwriter-1"),
+	}
+	stub.MockInvoke("3", updateArgs)
+
+	// Approve the loan
+	approveArgs := [][]byte{
+		[]byte("ApproveLoan"),
+		[]byte(loanApp.LoanApplicationID),
+		[]byte("45000.00"),
+		[]byte("5.5"),
+		[]byte("60"),
+		[]byte("test-credit-officer-1"),
+	}
+	stub.MockInvoke("4", approveArgs)
+
+	// Test getting loan history
+	historyArgs := [][]byte{
+		[]byte("GetLoanHistory"),
+		[]byte(loanApp.LoanApplicationID),
+		[]byte("test-actor-1"),
+	}
+
+	response := stub.MockInvoke("5", historyArgs)
+	if response.Status != shim.OK {
+		t.Errorf("GetLoanHistory failed with status %d and message: %s", response.Status, response.Message)
+	}
+
+	// Parse the history response
+	var historyResponse map[string]interface{}
+	err := json.Unmarshal(response.Payload, &historyResponse)
+	if err != nil {
+		t.Errorf("Failed to unmarshal history response: %v", err)
+	}
+
+	// Verify response structure
+	if historyResponse["loanApplicationID"] != loanApp.LoanApplicationID {
+		t.Errorf("Expected loan ID '%s', got '%s'", loanApp.LoanApplicationID, historyResponse["loanApplicationID"])
+	}
+
+	// Verify history count (should have multiple entries from all the operations)
+	historyCount, ok := historyResponse["historyCount"].(float64)
+	if !ok {
+		t.Error("History count should be a number")
+	}
+	if historyCount < 4 { // At least CREATE, UPDATE to Underwriting, UPDATE to Credit_Review, APPROVE
+		t.Errorf("Expected at least 4 history entries, got %f", historyCount)
+	}
+
+	// Verify current state is included
+	currentState, ok := historyResponse["currentState"]
+	if !ok {
+		t.Error("Current state should be included in history response")
+	}
+	currentStateMap := currentState.(map[string]interface{})
+	if currentStateMap["applicationStatus"] != "Approved" {
+		t.Errorf("Expected current status 'Approved', got '%s'", currentStateMap["applicationStatus"])
+	}
+
+	// Verify history entries structure
+	history, ok := historyResponse["history"].([]interface{})
+	if !ok {
+		t.Error("History should be an array")
+	}
+	if len(history) == 0 {
+		t.Error("History should not be empty")
+	}
+
+	// Verify first history entry (creation)
+	firstEntry := history[0].(map[string]interface{})
+	if firstEntry["changeType"] != "CREATE" {
+		t.Errorf("Expected first entry to be CREATE, got '%s'", firstEntry["changeType"])
+	}
+	if firstEntry["fieldName"] != "status" {
+		t.Errorf("Expected first entry field to be 'status', got '%s'", firstEntry["fieldName"])
+	}
+	if firstEntry["newValue"] != "Submitted" {
+		t.Errorf("Expected first entry new value to be 'Submitted', got '%s'", firstEntry["newValue"])
+	}
+}
+
+func TestGetLoanHistory_NonExistentLoan(t *testing.T) {
+	cc := new(LoanChaincode)
+	stub := shimtest.NewMockStub("loan", cc)
+	setupTestEnvironment(stub)
+
+	// Test getting history for non-existent loan
+	historyArgs := [][]byte{
+		[]byte("GetLoanHistory"),
+		[]byte("non-existent-loan"),
+		[]byte("test-actor-1"),
+	}
+
+	response := stub.MockInvoke("1", historyArgs)
+	if response.Status == shim.OK {
+		t.Error("Expected GetLoanHistory to fail with non-existent loan")
+	}
+}
+
+func TestGetLoanHistory_AccessControl(t *testing.T) {
+	cc := new(LoanChaincode)
+	stub := shimtest.NewMockStub("loan", cc)
+	setupTestEnvironment(stub)
+
+	loanApp := createTestLoanApplication(t, stub, cc)
+
+	// Test with actor that doesn't have view permissions
+	unauthorizedActor := shared.Actor{
+		ActorID:           "unauthorized-actor",
+		ActorType:         shared.ActorTypeInternalUser,
+		ActorName:         "Unauthorized User",
+		Role:              shared.RoleCustomerService,
+		BlockchainIdentity: "unauthorized-cert",
+		Permissions:       []shared.Permission{}, // No permissions
+		IsActive:          true,
+		CreatedDate:       time.Now(),
+		LastUpdated:       time.Now(),
+	}
+	actorJSON, _ := json.Marshal(unauthorizedActor)
+	stub.MockTransactionStart("setup-unauthorized")
+	stub.PutState("ACTOR_unauthorized-actor", actorJSON)
+	stub.MockTransactionEnd("setup-unauthorized")
+
+	historyArgs := [][]byte{
+		[]byte("GetLoanHistory"),
+		[]byte(loanApp.LoanApplicationID),
+		[]byte("unauthorized-actor"),
+	}
+
+	response := stub.MockInvoke("2", historyArgs)
+	if response.Status == shim.OK {
+		t.Error("Expected GetLoanHistory to fail with unauthorized actor")
+	}
+}
+
+func TestRecordLoanHistoryEntry_Success(t *testing.T) {
+	cc := new(LoanChaincode)
+	stub := shimtest.NewMockStub("loan", cc)
+	setupTestEnvironment(stub)
+
+	// Test recording a history entry within a transaction
+	loanID := "test-loan-123"
+	
+	stub.MockTransactionStart("test-history")
+	err := cc.recordLoanHistoryEntry(stub, loanID, "TEST", "testField", "oldValue", "newValue", "test-actor-1", 1, "Test context")
+	stub.MockTransactionEnd("test-history")
+	
+	if err != nil {
+		t.Errorf("Failed to record loan history entry: %v", err)
+	}
+
+	// Verify the history entry was stored
+	historyEntries, err := shared.GetEntityHistory(stub, loanID)
+	if err != nil {
+		t.Errorf("Failed to retrieve history entries: %v", err)
+	}
+
+	if len(historyEntries) == 0 {
+		t.Error("Expected at least one history entry")
+		return
+	}
+
+	// Verify the entry details
+	entry := historyEntries[0]
+	if entry.EntityID != loanID {
+		t.Errorf("Expected entity ID '%s', got '%s'", loanID, entry.EntityID)
+	}
+	if entry.ChangeType != "TEST" {
+		t.Errorf("Expected change type 'TEST', got '%s'", entry.ChangeType)
+	}
+	if entry.FieldName != "testField" {
+		t.Errorf("Expected field name 'testField', got '%s'", entry.FieldName)
+	}
+	if entry.PreviousValue != "oldValue" {
+		t.Errorf("Expected previous value 'oldValue', got '%s'", entry.PreviousValue)
+	}
+	if entry.NewValue != "newValue" {
+		t.Errorf("Expected new value 'newValue', got '%s'", entry.NewValue)
+	}
+	if entry.ActorID != "test-actor-1" {
+		t.Errorf("Expected actor ID 'test-actor-1', got '%s'", entry.ActorID)
+	}
+}
+
+func TestValidateHistoryEntry_Success(t *testing.T) {
+	// Test valid history entry
+	entry := shared.HistoryEntry{
+		HistoryID:     "HIST_123",
+		EntityID:      "test-loan-123",
+		EntityType:    "LoanApplication",
+		Timestamp:     time.Now(),
+		ChangeType:    "CREATE",
+		FieldName:     "status",
+		PreviousValue: "",
+		NewValue:      "Submitted",
+		ActorID:       "test-actor-1",
+		TransactionID: "tx-123",
+	}
+
+	err := validateHistoryEntry(entry, "test-loan-123")
+	if err != nil {
+		t.Errorf("Expected valid history entry to pass validation, got error: %v", err)
+	}
+}
+
+func TestValidateHistoryEntry_InvalidEntityID(t *testing.T) {
+	entry := shared.HistoryEntry{
+		HistoryID:     "HIST_123",
+		EntityID:      "wrong-loan-id",
+		EntityType:    "LoanApplication",
+		Timestamp:     time.Now(),
+		ChangeType:    "CREATE",
+		FieldName:     "status",
+		PreviousValue: "",
+		NewValue:      "Submitted",
+		ActorID:       "test-actor-1",
+		TransactionID: "tx-123",
+	}
+
+	err := validateHistoryEntry(entry, "test-loan-123")
+	if err == nil {
+		t.Error("Expected validation to fail with mismatched entity ID")
+	}
+}
+
+func TestValidateHistoryEntry_InvalidEntityType(t *testing.T) {
+	entry := shared.HistoryEntry{
+		HistoryID:     "HIST_123",
+		EntityID:      "test-loan-123",
+		EntityType:    "Customer", // Wrong entity type
+		Timestamp:     time.Now(),
+		ChangeType:    "CREATE",
+		FieldName:     "status",
+		PreviousValue: "",
+		NewValue:      "Submitted",
+		ActorID:       "test-actor-1",
+		TransactionID: "tx-123",
+	}
+
+	err := validateHistoryEntry(entry, "test-loan-123")
+	if err == nil {
+		t.Error("Expected validation to fail with wrong entity type")
+	}
+}
+
+func TestValidateHistoryEntry_MissingRequiredFields(t *testing.T) {
+	// Test missing HistoryID
+	entry := shared.HistoryEntry{
+		HistoryID:     "", // Missing
+		EntityID:      "test-loan-123",
+		EntityType:    "LoanApplication",
+		Timestamp:     time.Now(),
+		ChangeType:    "CREATE",
+		FieldName:     "status",
+		PreviousValue: "",
+		NewValue:      "Submitted",
+		ActorID:       "test-actor-1",
+		TransactionID: "tx-123",
+	}
+
+	err := validateHistoryEntry(entry, "test-loan-123")
+	if err == nil {
+		t.Error("Expected validation to fail with missing HistoryID")
+	}
+
+	// Test missing ActorID
+	entry.HistoryID = "HIST_123"
+	entry.ActorID = "" // Missing
+	err = validateHistoryEntry(entry, "test-loan-123")
+	if err == nil {
+		t.Error("Expected validation to fail with missing ActorID")
+	}
+
+	// Test missing TransactionID
+	entry.ActorID = "test-actor-1"
+	entry.TransactionID = "" // Missing
+	err = validateHistoryEntry(entry, "test-loan-123")
+	if err == nil {
+		t.Error("Expected validation to fail with missing TransactionID")
+	}
+}
+
+func TestValidateHistoryEntry_InvalidChangeType(t *testing.T) {
+	entry := shared.HistoryEntry{
+		HistoryID:     "HIST_123",
+		EntityID:      "test-loan-123",
+		EntityType:    "LoanApplication",
+		Timestamp:     time.Now(),
+		ChangeType:    "INVALID_TYPE", // Invalid change type
+		FieldName:     "status",
+		PreviousValue: "",
+		NewValue:      "Submitted",
+		ActorID:       "test-actor-1",
+		TransactionID: "tx-123",
+	}
+
+	err := validateHistoryEntry(entry, "test-loan-123")
+	if err == nil {
+		t.Error("Expected validation to fail with invalid change type")
+	}
+}
+
+func TestGenerateAdditionalContext(t *testing.T) {
+	// Test CREATE context
+	createEntry := shared.HistoryEntry{
+		ChangeType: "CREATE",
+		FieldName:  "status",
+	}
+	context := generateAdditionalContext(createEntry)
+	if context != "Initial loan application submission" {
+		t.Errorf("Expected CREATE context, got '%s'", context)
+	}
+
+	// Test UPDATE context
+	updateEntry := shared.HistoryEntry{
+		ChangeType:    "UPDATE",
+		FieldName:     "status",
+		PreviousValue: "Submitted",
+		NewValue:      "Underwriting",
+	}
+	context = generateAdditionalContext(updateEntry)
+	expected := "Status transition from Submitted to Underwriting"
+	if context != expected {
+		t.Errorf("Expected '%s', got '%s'", expected, context)
+	}
+
+	// Test APPROVE context
+	approveEntry := shared.HistoryEntry{
+		ChangeType: "APPROVE",
+	}
+	context = generateAdditionalContext(approveEntry)
+	if context != "Loan application approved with terms" {
+		t.Errorf("Expected APPROVE context, got '%s'", context)
+	}
+
+	// Test REJECT context
+	rejectEntry := shared.HistoryEntry{
+		ChangeType: "REJECT",
+	}
+	context = generateAdditionalContext(rejectEntry)
+	if context != "Loan application rejected" {
+		t.Errorf("Expected REJECT context, got '%s'", context)
+	}
+}
+
+func TestSortHistoryByTimestamp(t *testing.T) {
+	now := time.Now()
+	
+	// Create history entries with different timestamps
+	history := []LoanApplicationHistory{
+		{
+			HistoryID: "HIST_3",
+			Timestamp: now.Add(2 * time.Hour), // Latest
+		},
+		{
+			HistoryID: "HIST_1",
+			Timestamp: now, // Earliest
+		},
+		{
+			HistoryID: "HIST_2",
+			Timestamp: now.Add(1 * time.Hour), // Middle
+		},
+	}
+
+	// Sort the history
+	sortHistoryByTimestamp(history)
+
+	// Verify chronological order (oldest first)
+	if history[0].HistoryID != "HIST_1" {
+		t.Errorf("Expected first entry to be HIST_1, got %s", history[0].HistoryID)
+	}
+	if history[1].HistoryID != "HIST_2" {
+		t.Errorf("Expected second entry to be HIST_2, got %s", history[1].HistoryID)
+	}
+	if history[2].HistoryID != "HIST_3" {
+		t.Errorf("Expected third entry to be HIST_3, got %s", history[2].HistoryID)
+	}
+}
+
+func TestHistoryIntegrityThroughWorkflow(t *testing.T) {
+	cc := new(LoanChaincode)
+	stub := shimtest.NewMockStub("loan", cc)
+	setupTestEnvironment(stub)
+
+	// Create loan application
+	loanApp := createTestLoanApplication(t, stub, cc)
+
+	// Progress through complete workflow
+	progressToUnderwriting(t, stub, cc, loanApp.LoanApplicationID)
+	
+	// Progress to credit review
+	updateArgs := [][]byte{
+		[]byte("UpdateStatus"),
+		[]byte(loanApp.LoanApplicationID),
+		[]byte("Credit_Review"),
+		[]byte("test-underwriter-1"),
+	}
+	stub.MockInvoke("3", updateArgs)
+
+	// Approve the loan
+	approveArgs := [][]byte{
+		[]byte("ApproveLoan"),
+		[]byte(loanApp.LoanApplicationID),
+		[]byte("45000.00"),
+		[]byte("5.5"),
+		[]byte("60"),
+		[]byte("test-credit-officer-1"),
+	}
+	stub.MockInvoke("4", approveArgs)
+
+	// Get complete history
+	historyArgs := [][]byte{
+		[]byte("GetLoanHistory"),
+		[]byte(loanApp.LoanApplicationID),
+		[]byte("test-actor-1"),
+	}
+	response := stub.MockInvoke("5", historyArgs)
+
+	if response.Status != shim.OK {
+		t.Fatalf("Failed to get loan history: %s", response.Message)
+	}
+
+	var historyResponse map[string]interface{}
+	json.Unmarshal(response.Payload, &historyResponse)
+
+	history := historyResponse["history"].([]interface{})
+	
+	// Verify complete audit trail
+	expectedChangeTypes := []string{"CREATE", "UPDATE", "UPDATE", "APPROVE"}
+	if len(history) < len(expectedChangeTypes) {
+		t.Errorf("Expected at least %d history entries, got %d", len(expectedChangeTypes), len(history))
+	}
+
+	// Verify chronological order and change types
+	for i, expectedType := range expectedChangeTypes {
+		if i >= len(history) {
+			break
+		}
+		entry := history[i].(map[string]interface{})
+		if entry["changeType"] != expectedType {
+			t.Errorf("Expected change type '%s' at position %d, got '%s'", expectedType, i, entry["changeType"])
+		}
+	}
+
+	// Verify all entries have required fields
+	for i, historyEntry := range history {
+		entry := historyEntry.(map[string]interface{})
+		requiredFields := []string{"historyID", "loanApplicationID", "timestamp", "changeType", "actorID", "transactionID"}
+		for _, field := range requiredFields {
+			if _, exists := entry[field]; !exists {
+				t.Errorf("History entry %d missing required field '%s'", i, field)
+			}
+		}
+	}
+}

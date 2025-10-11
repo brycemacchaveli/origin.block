@@ -57,6 +57,21 @@ type LoanApplication struct {
 	Version            int                   `json:"version"`
 }
 
+// LoanApplicationHistory represents a complete immutable audit trail entry for loan applications
+type LoanApplicationHistory struct {
+	HistoryID           string    `json:"historyID"`
+	LoanApplicationID   string    `json:"loanApplicationID"`
+	Timestamp          time.Time `json:"timestamp"`
+	ChangeType         string    `json:"changeType"` // CREATE, UPDATE, APPROVE, REJECT, etc.
+	FieldName          string    `json:"fieldName"`  // Field that was changed
+	PreviousValue      string    `json:"previousValue"`
+	NewValue           string    `json:"newValue"`
+	ActorID            string    `json:"actorID"`    // Who made the change
+	TransactionID      string    `json:"transactionID"`
+	Version            int       `json:"version"`    // Application version at time of change
+	AdditionalContext  string    `json:"additionalContext,omitempty"` // Extra context for complex changes
+}
+
 // LoanChaincode implements the fabric Contract interface
 type LoanChaincode struct {
 }
@@ -83,6 +98,8 @@ func (t *LoanChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Response {
 		return t.RejectLoan(stub, args)
 	case "GetLoanApplication":
 		return t.GetLoanApplication(stub, args)
+	case "GetLoanHistory":
+		return t.GetLoanHistory(stub, args)
 	default:
 		return shim.Error("Invalid function name: " + function)
 	}
@@ -169,8 +186,8 @@ func (t *LoanChaincode) SubmitApplication(stub shim.ChaincodeStubInterface, args
 		return shim.Error(fmt.Sprintf("Failed to store loan application: %v", err))
 	}
 
-	// Record history entry
-	err = shared.RecordHistoryEntry(stub, loanApplicationID, "LoanApplication", "CREATE", "status", "", string(StatusSubmitted), actorID)
+	// Record detailed history entry
+	err = t.recordLoanHistoryEntry(stub, loanApplicationID, "CREATE", "status", "", string(StatusSubmitted), actorID, loanApplication.Version, "Initial loan application submission")
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Failed to record history: %v", err))
 	}
@@ -248,8 +265,9 @@ func (t *LoanChaincode) UpdateStatus(stub shim.ChaincodeStubInterface, args []st
 		return shim.Error(fmt.Sprintf("Failed to update loan application: %v", err))
 	}
 
-	// Record history entry
-	err = shared.RecordHistoryEntry(stub, loanApplicationID, "LoanApplication", "UPDATE", "status", string(previousStatus), string(newStatus), actorID)
+	// Record detailed history entry
+	contextMsg := fmt.Sprintf("Status transition from %s to %s", previousStatus, newStatus)
+	err = t.recordLoanHistoryEntry(stub, loanApplicationID, "UPDATE", "status", string(previousStatus), string(newStatus), actorID, loanApplication.Version, contextMsg)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Failed to record history: %v", err))
 	}
@@ -353,20 +371,27 @@ func (t *LoanChaincode) ApproveLoan(stub shim.ChaincodeStubInterface, args []str
 		return shim.Error(fmt.Sprintf("Failed to update loan application: %v", err))
 	}
 
-	// Record history entries for all changes
-	err = shared.RecordHistoryEntry(stub, loanApplicationID, "LoanApplication", "APPROVE", "status", string(previousStatus), string(StatusApproved), actorID)
+	// Record detailed history entries for all changes
+	approvalContext := fmt.Sprintf("Loan approved: Amount=%s, Rate=%s%%, Term=%d months", approvedAmountStr, interestRateStr, loanTerm)
+	
+	err = t.recordLoanHistoryEntry(stub, loanApplicationID, "APPROVE", "status", string(previousStatus), string(StatusApproved), actorID, loanApplication.Version, approvalContext)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Failed to record status history: %v", err))
 	}
 
-	err = shared.RecordHistoryEntry(stub, loanApplicationID, "LoanApplication", "APPROVE", "approvedAmount", "0", approvedAmountStr, actorID)
+	err = t.recordLoanHistoryEntry(stub, loanApplicationID, "APPROVE", "approvedAmount", "0", approvedAmountStr, actorID, loanApplication.Version, "Approved loan amount set")
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Failed to record amount history: %v", err))
 	}
 
-	err = shared.RecordHistoryEntry(stub, loanApplicationID, "LoanApplication", "APPROVE", "interestRate", "0", interestRateStr, actorID)
+	err = t.recordLoanHistoryEntry(stub, loanApplicationID, "APPROVE", "interestRate", "0", interestRateStr, actorID, loanApplication.Version, "Interest rate set")
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Failed to record rate history: %v", err))
+	}
+
+	err = t.recordLoanHistoryEntry(stub, loanApplicationID, "APPROVE", "loanTerm", "0", loanTermStr, actorID, loanApplication.Version, "Loan term set")
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to record term history: %v", err))
 	}
 
 	// Emit event
@@ -451,13 +476,15 @@ func (t *LoanChaincode) RejectLoan(stub shim.ChaincodeStubInterface, args []stri
 		return shim.Error(fmt.Sprintf("Failed to update loan application: %v", err))
 	}
 
-	// Record history entries
-	err = shared.RecordHistoryEntry(stub, loanApplicationID, "LoanApplication", "REJECT", "status", string(previousStatus), string(StatusRejected), actorID)
+	// Record detailed history entries
+	rejectionContext := fmt.Sprintf("Loan rejected: %s", rejectionReason)
+	
+	err = t.recordLoanHistoryEntry(stub, loanApplicationID, "REJECT", "status", string(previousStatus), string(StatusRejected), actorID, loanApplication.Version, rejectionContext)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Failed to record status history: %v", err))
 	}
 
-	err = shared.RecordHistoryEntry(stub, loanApplicationID, "LoanApplication", "REJECT", "rejectionReason", "", rejectionReason, actorID)
+	err = t.recordLoanHistoryEntry(stub, loanApplicationID, "REJECT", "rejectionReason", "", rejectionReason, actorID, loanApplication.Version, "Rejection reason recorded")
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Failed to record reason history: %v", err))
 	}
@@ -516,6 +543,129 @@ func (t *LoanChaincode) GetLoanApplication(stub shim.ChaincodeStubInterface, arg
 	return shim.Success(loanJSON)
 }
 
+// GetLoanHistory retrieves the complete audit trail for a loan application
+func (t *LoanChaincode) GetLoanHistory(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Expected args: [loanApplicationID, actorID]
+	if len(args) != 2 {
+		return shim.Error("Incorrect number of arguments. Expecting 2: loanApplicationID, actorID")
+	}
+
+	loanApplicationID := args[0]
+	actorID := args[1]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionViewLoan)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Verify loan application exists
+	loanKey := "LOAN_" + loanApplicationID
+	var loanApplication LoanApplication
+	err = shared.GetStateAsJSON(stub, loanKey, &loanApplication)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to get loan application: %v", err))
+	}
+
+	// Get history entries using shared utility
+	historyEntries, err := shared.GetEntityHistory(stub, loanApplicationID)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to get loan history: %v", err))
+	}
+
+	// Convert to LoanApplicationHistory format with additional validation
+	var loanHistory []LoanApplicationHistory
+	for _, entry := range historyEntries {
+		// Validate history entry integrity
+		if err := validateHistoryEntry(entry, loanApplicationID); err != nil {
+			return shim.Error(fmt.Sprintf("History integrity validation failed: %v", err))
+		}
+
+		loanHistoryEntry := LoanApplicationHistory{
+			HistoryID:         entry.HistoryID,
+			LoanApplicationID: entry.EntityID,
+			Timestamp:        entry.Timestamp,
+			ChangeType:       entry.ChangeType,
+			FieldName:        entry.FieldName,
+			PreviousValue:    entry.PreviousValue,
+			NewValue:         entry.NewValue,
+			ActorID:          entry.ActorID,
+			TransactionID:    entry.TransactionID,
+			Version:          extractVersionFromHistory(entry),
+			AdditionalContext: generateAdditionalContext(entry),
+		}
+		loanHistory = append(loanHistory, loanHistoryEntry)
+	}
+
+	// Sort history by timestamp (oldest first) for chronological audit trail
+	sortHistoryByTimestamp(loanHistory)
+
+	// Create response with both current state and complete history
+	response := map[string]interface{}{
+		"loanApplicationID": loanApplicationID,
+		"currentState":     loanApplication,
+		"historyCount":     len(loanHistory),
+		"history":          loanHistory,
+		"retrievedBy":      actorID,
+		"retrievedAt":      time.Now(),
+	}
+
+	// Emit audit event for history access
+	auditPayload := map[string]interface{}{
+		"loanApplicationID": loanApplicationID,
+		"accessedBy":       actorID,
+		"historyCount":     len(loanHistory),
+		"accessType":       "HISTORY_RETRIEVAL",
+	}
+	err = shared.EmitEvent(stub, "LoanHistoryAccessed", auditPayload)
+	if err != nil {
+		// Log but don't fail the request for audit event issues
+		fmt.Printf("Warning: Failed to emit audit event: %v", err)
+	}
+
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal history response: %v", err))
+	}
+
+	return shim.Success(responseJSON)
+}
+
+// recordLoanHistoryEntry creates a detailed history entry specific to loan applications
+func (t *LoanChaincode) recordLoanHistoryEntry(stub shim.ChaincodeStubInterface, loanApplicationID, changeType, fieldName, previousValue, newValue, actorID string, version int, additionalContext string) error {
+	// Use the shared utility for basic history recording
+	err := shared.RecordHistoryEntry(stub, loanApplicationID, "LoanApplication", changeType, fieldName, previousValue, newValue, actorID)
+	if err != nil {
+		return fmt.Errorf("failed to record basic history entry: %v", err)
+	}
+
+	// Create additional loan-specific history entry with enhanced details
+	historyID := shared.GenerateID("LOAN_HIST")
+	txID := stub.GetTxID()
+	
+	loanHistoryEntry := LoanApplicationHistory{
+		HistoryID:         historyID,
+		LoanApplicationID: loanApplicationID,
+		Timestamp:        time.Now(),
+		ChangeType:       changeType,
+		FieldName:        fieldName,
+		PreviousValue:    previousValue,
+		NewValue:         newValue,
+		ActorID:          actorID,
+		TransactionID:    txID,
+		Version:          version,
+		AdditionalContext: additionalContext,
+	}
+	
+	// Store with composite key for efficient querying
+	compositeKey, err := stub.CreateCompositeKey("LOAN_HISTORY", []string{loanApplicationID, historyID})
+	if err != nil {
+		return fmt.Errorf("failed to create composite key for loan history: %v", err)
+	}
+	
+	return shared.PutStateAsJSON(stub, compositeKey, loanHistoryEntry)
+}
+
 // Helper functions
 
 // isValidLoanType checks if the loan type is valid
@@ -567,6 +717,87 @@ func isValidStatusTransition(currentStatus, newStatus LoanApplicationStatus) boo
 		}
 	}
 	return false
+}
+
+// validateHistoryEntry performs integrity checks on history entries
+func validateHistoryEntry(entry shared.HistoryEntry, expectedLoanID string) error {
+	// Validate entity ID matches expected loan ID
+	if entry.EntityID != expectedLoanID {
+		return fmt.Errorf("history entry entity ID %s does not match expected loan ID %s", entry.EntityID, expectedLoanID)
+	}
+
+	// Validate entity type
+	if entry.EntityType != "LoanApplication" {
+		return fmt.Errorf("invalid entity type %s, expected LoanApplication", entry.EntityType)
+	}
+
+	// Validate required fields
+	if entry.HistoryID == "" {
+		return fmt.Errorf("history entry missing HistoryID")
+	}
+	if entry.ActorID == "" {
+		return fmt.Errorf("history entry missing ActorID")
+	}
+	if entry.TransactionID == "" {
+		return fmt.Errorf("history entry missing TransactionID")
+	}
+	if entry.Timestamp.IsZero() {
+		return fmt.Errorf("history entry missing valid timestamp")
+	}
+
+	// Validate change type
+	validChangeTypes := []string{"CREATE", "UPDATE", "APPROVE", "REJECT", "CANCEL", "DISBURSE"}
+	isValidChangeType := false
+	for _, validType := range validChangeTypes {
+		if entry.ChangeType == validType {
+			isValidChangeType = true
+			break
+		}
+	}
+	if !isValidChangeType {
+		return fmt.Errorf("invalid change type %s", entry.ChangeType)
+	}
+
+	return nil
+}
+
+// extractVersionFromHistory extracts version information from history entry
+func extractVersionFromHistory(entry shared.HistoryEntry) int {
+	// For now, return 1 as default. In a more sophisticated implementation,
+	// this could parse version information from the entry details
+	return 1
+}
+
+// generateAdditionalContext creates contextual information for history entries
+func generateAdditionalContext(entry shared.HistoryEntry) string {
+	switch entry.ChangeType {
+	case "CREATE":
+		return "Initial loan application submission"
+	case "UPDATE":
+		if entry.FieldName == "status" {
+			return fmt.Sprintf("Status transition from %s to %s", entry.PreviousValue, entry.NewValue)
+		}
+		return fmt.Sprintf("Field %s updated", entry.FieldName)
+	case "APPROVE":
+		return "Loan application approved with terms"
+	case "REJECT":
+		return "Loan application rejected"
+	default:
+		return fmt.Sprintf("Change type: %s", entry.ChangeType)
+	}
+}
+
+// sortHistoryByTimestamp sorts history entries chronologically (oldest first)
+func sortHistoryByTimestamp(history []LoanApplicationHistory) {
+	// Simple bubble sort for chronological ordering
+	n := len(history)
+	for i := 0; i < n-1; i++ {
+		for j := 0; j < n-i-1; j++ {
+			if history[j].Timestamp.After(history[j+1].Timestamp) {
+				history[j], history[j+1] = history[j+1], history[j]
+			}
+		}
+	}
 }
 
 func main() {
