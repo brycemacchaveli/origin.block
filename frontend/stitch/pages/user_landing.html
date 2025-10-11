@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect"/>
+<link as="style" href="https://fonts.googleapis.com/css2?display=swap&amp;family=Manrope%3Awght%40400%3B500%3B700%3B800&amp;family=Noto+Sans%3Awght%40400%3B500%3B700%3B900" onload="this.rel='stylesheet'" rel="stylesheet"/>
+<title>Stitch Design</title>
+<link href="data:image/x-icon;base64," rel="icon" type="image/x-icon"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary": "#1173d4",
+              "background-light": "#f6f7f8",
+              "background-dark": "#101922",
+            },
+            fontFamily: {
+              "display": ["Manrope"]
+            },
+            borderRadius: { "DEFAULT": "0.5rem", "lg": "1rem", "xl": "1.5rem", "full": "9999px" },
+          },
+        },
+      }
+    </script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+</head>
+<body class="font-display">
+<div class="flex min-h-screen w-full bg-background-light dark:bg-background-dark text-slate-800 dark:text-slate-200">
+<aside class="w-64 flex-col bg-background-light dark:bg-background-dark p-4 hidden lg:flex border-r border-slate-200 dark:border-slate-800">
+<div class="flex flex-col gap-8">
+<h1 class="text-xl font-bold text-slate-900 dark:text-white px-4">BlockChain Finance</h1>
+<nav class="flex flex-col gap-2">
+<a class="flex items-center gap-3 px-4 py-2 rounded-lg bg-primary/10 dark:bg-primary/20 text-primary font-bold" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span>Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-2 rounded-lg hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary" href="#">
+<span class="material-symbols-outlined">groups</span>
+<span>Customers</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-2 rounded-lg hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary" href="#">
+<span class="material-symbols-outlined">handshake</span>
+<span>Loans</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-2 rounded-lg hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary" href="#">
+<span class="material-symbols-outlined">bar_chart</span>
+<span>Reports</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-2 rounded-lg hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span>Settings</span>
+</a>
+</nav>
+</div>
+<div class="mt-auto flex flex-col gap-4">
+<button class="flex w-full items-center justify-center rounded-lg h-10 px-4 bg-primary text-white text-sm font-bold">
+<span>New Loan</span>
+</button>
+<a class="flex items-center gap-3 px-4 py-2 rounded-lg hover:bg-primary/10 dark:hover:bg-primary/20 hover:text-primary" href="#">
+<span class="material-symbols-outlined">help</span>
+<span>Help and Docs</span>
+</a>
+</div>
+</aside>
+<main class="flex-1 flex flex-col">
+<div class="p-6">
+<p class="text-3xl font-bold text-slate-900 dark:text-white">Welcome back, Alex</p>
+</div>
+<div class="px-6 pb-6">
+<h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">Quick Stats</h2>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+<div class="bg-white dark:bg-slate-900/50 p-6 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2">
+<p class="text-base font-medium text-slate-600 dark:text-slate-400">Customers</p>
+<p class="text-3xl font-bold text-slate-900 dark:text-white">1,234</p>
+<p class="text-base font-medium text-green-500">+12%</p>
+</div>
+<div class="bg-white dark:bg-slate-900/50 p-6 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2">
+<p class="text-base font-medium text-slate-600 dark:text-slate-400">Loans</p>
+<p class="text-3xl font-bold text-slate-900 dark:text-white">567</p>
+<p class="text-base font-medium text-green-500">+5%</p>
+</div>
+<div class="bg-white dark:bg-slate-900/50 p-6 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2">
+<p class="text-base font-medium text-slate-600 dark:text-slate-400">Applications</p>
+<p class="text-3xl font-bold text-slate-900 dark:text-white">89</p>
+<p class="text-base font-medium text-red-500">-2%</p>
+</div>
+</div>
+</div>
+<div class="px-6 pb-6">
+<h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">My Tasks</h2>
+<div class="space-y-4">
+<div class="bg-white dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between gap-6">
+<div class="flex-grow">
+<p class="text-base font-bold text-slate-900 dark:text-white">Review Application</p>
+<p class="text-sm text-slate-600 dark:text-slate-400">Application from Sarah Johnson requires review.</p>
+<button class="mt-3 rounded-lg h-8 px-4 bg-primary/10 dark:bg-primary/20 text-primary text-sm font-bold">Review</button>
+</div>
+<div class="w-40 h-24 bg-center bg-no-repeat bg-cover rounded-lg" style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuBZmZ0ghxI0pVFCRjyvNnjjk7gskgUHN-dQfRpsubx_B0VW8rCd_v_hY1yj5ILBYaAC8GEbV37RTi478MSegCb40qiUCiAxQy408yA0Z_KGkYtoGRXFZ8JH8uCJ19bVtf3XsQqhGXjG-3r_1ka3kRptaghS71YF7rwcNx2PMbqTrARaJ6DPBqx_hACFCVfIODvQlqW3ZFqwnAggImAeAj4lP2gyA_Gu791K2iZBC-A74S9wieqRve1yR9GfIXig_wYv6hea8gz5FZFQ");'></div>
+</div>
+<div class="bg-white dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between gap-6">
+<div class="flex-grow">
+<p class="text-base font-bold text-slate-900 dark:text-white">Approve Loan</p>
+<p class="text-sm text-slate-600 dark:text-slate-400">Loan application from David Lee is ready for approval.</p>
+<button class="mt-3 rounded-lg h-8 px-4 bg-primary/10 dark:bg-primary/20 text-primary text-sm font-bold">Approve</button>
+</div>
+<div class="w-40 h-24 bg-center bg-no-repeat bg-cover rounded-lg" style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuBpyJY7DwdnmVrqyUf7SioI-gmUjdlfIM5NHMRSS8yZlsnk8B2shZobggAPpVhYvJ1MhZmkAcLsoxi8r-N-2UX2Ke6i5zdRXxkIk4cW7qJTikCkI5gMRGumDwr_n1a7wgwCDM5SjpaH40H7vb7SZzQs9QWAEYp13dXLEgP2KhD5EjaijjeO69qduuXiQh2txg4S-XsIXPFrdBtPsCbeMxVMbPvjOBml2s_6NCGvgmhGF_Zh6kKkZi4p_DH2Qc4DTyoeV9rEmqs5BC6I");'></div>
+</div>
+<div class="bg-white dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between gap-6">
+<div class="flex-grow">
+<p class="text-base font-bold text-slate-900 dark:text-white">Customer Onboarding</p>
+<p class="text-sm text-slate-600 dark:text-slate-400">Complete onboarding for new customer, Emily Chen.</p>
+<button class="mt-3 rounded-lg h-8 px-4 bg-primary/10 dark:bg-primary/20 text-primary text-sm font-bold">Onboard</button>
+</div>
+<div class="w-40 h-24 bg-center bg-no-repeat bg-cover rounded-lg" style='background-image: url("https://lh3.googleusercontent.com/aida-public/AB6AXuCkDRqSn7klNMjp02sopYjd0eeowJG2rVKvQsZKAItCoboqBqCJqh8H0kaVYa8OqzNtnQA1go7rPIRAcpC3uUx3zDF5sV14fJbEMhqyzTrfP-hYjDtNPZCOkE22tLKiZYAFvi7IimYZpUVNyoruByoUXiotj55V89dFRNk5RJzN_FSVEhYHNiqjv5c3lzZ99eZ5mzL45yIAEZysaQFqVZ1mE-rTZiHja9P03aKU4FwGp2gaX9L3ibAk_Mah7LjyyzwjYN7snVsaTn9d");'></div>
+</div>
+</div>
+</div>
+<div class="px-6 pb-6 mt-auto">
+<h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">Quick Actions</h2>
+<div class="flex gap-4">
+<button class="flex-1 rounded-lg h-10 px-4 bg-primary text-white text-sm font-bold">New Customer</button>
+<button class="flex-1 rounded-lg h-10 px-4 bg-primary/10 dark:bg-primary/20 text-primary text-sm font-bold">New Loan</button>
+</div>
+</div>
+</main>
+</div>
+
+</body></html>
