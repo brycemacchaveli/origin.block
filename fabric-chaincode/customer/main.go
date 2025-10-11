@@ -44,6 +44,20 @@ type CustomerEvent struct {
 	Details      string    `json:"details"`
 }
 
+// ConsentPreferences represents customer consent preferences
+type ConsentPreferences struct {
+	DataSharing          bool      `json:"dataSharing"`
+	MarketingCommunication bool    `json:"marketingCommunication"`
+	ThirdPartySharing    bool      `json:"thirdPartySharing"`
+	CreditBureauSharing  bool      `json:"creditBureauSharing"`
+	RegulatoryReporting  bool      `json:"regulatoryReporting"`
+	ConsentDate          time.Time `json:"consentDate"`
+	ExpiryDate           time.Time `json:"expiryDate"`
+	ConsentVersion       string    `json:"consentVersion"`
+	IPAddress            string    `json:"ipAddress"`
+	UserAgent            string    `json:"userAgent"`
+}
+
 // Init is called during chaincode instantiation to initialize any data
 func (t *CustomerChaincode) Init(stub shim.ChaincodeStubInterface) peer.Response {
 	return shim.Success(nil)
@@ -62,6 +76,12 @@ func (t *CustomerChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Respon
 		return t.GetCustomer(stub, args)
 	case "GetCustomerHistory":
 		return t.GetCustomerHistory(stub, args)
+	case "RecordConsent":
+		return t.RecordConsent(stub, args)
+	case "UpdateConsent":
+		return t.UpdateConsent(stub, args)
+	case "GetConsent":
+		return t.GetConsent(stub, args)
 	case "ping":
 		return shim.Success([]byte("pong"))
 	default:
@@ -330,18 +350,19 @@ func (t *CustomerChaincode) UpdateCustomerDetails(stub shim.ChaincodeStubInterfa
 	return shim.Success(customerJSON)
 }
 
-// GetCustomer retrieves a customer record
+// GetCustomer retrieves a customer record with consent validation
 func (t *CustomerChaincode) GetCustomer(stub shim.ChaincodeStubInterface, args []string) peer.Response {
-	// Validate arguments
-	if len(args) != 2 {
-		return shim.Error("Incorrect number of arguments. Expecting 2: customerID, actorID")
+	// Validate arguments - now accepts optional third parameter for consent validation
+	if len(args) < 2 || len(args) > 3 {
+		return shim.Error("Incorrect number of arguments. Expecting 2-3: customerID, actorID, [validateConsent]")
 	}
 
 	customerID := args[0]
 	actorID := args[1]
+	validateConsent := len(args) == 3 && args[2] == "true"
 
 	// Validate actor permissions
-	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionViewCustomer)
+	actor, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionViewCustomer)
 	if err != nil {
 		return shim.Error(fmt.Sprintf("Access denied: %v", err))
 	}
@@ -350,6 +371,13 @@ func (t *CustomerChaincode) GetCustomer(stub shim.ChaincodeStubInterface, args [
 	var customer Customer
 	if err := shared.GetStateAsJSON(stub, customerID, &customer); err != nil {
 		return shim.Error(fmt.Sprintf("Customer not found: %v", err))
+	}
+
+	// Validate consent for data sharing if requested and actor is external
+	if validateConsent && actor.ActorType == shared.ActorTypeExternalPartner {
+		if err := t.ValidateConsentForDataSharing(stub, customerID, "DATA_SHARING"); err != nil {
+			return shim.Error(fmt.Sprintf("Consent validation failed: %v", err))
+		}
 	}
 
 	// Return customer data
@@ -396,6 +424,314 @@ func (t *CustomerChaincode) GetCustomerHistory(stub shim.ChaincodeStubInterface,
 	}
 
 	return shim.Success(historyJSON)
+}
+
+// RecordConsent records initial consent preferences for a customer
+func (t *CustomerChaincode) RecordConsent(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Validate arguments
+	if len(args) != 10 {
+		return shim.Error("Incorrect number of arguments. Expecting 10: customerID, dataSharing, marketingCommunication, thirdPartySharing, creditBureauSharing, regulatoryReporting, consentVersion, ipAddress, userAgent, actorID")
+	}
+
+	customerID := args[0]
+	dataSharing := args[1] == "true"
+	marketingCommunication := args[2] == "true"
+	thirdPartySharing := args[3] == "true"
+	creditBureauSharing := args[4] == "true"
+	regulatoryReporting := args[5] == "true"
+	consentVersion := args[6]
+	ipAddress := args[7]
+	userAgent := args[8]
+	actorID := args[9]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionUpdateCustomer)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Get existing customer
+	var existingCustomer Customer
+	if err := shared.GetStateAsJSON(stub, customerID, &existingCustomer); err != nil {
+		return shim.Error(fmt.Sprintf("Customer not found: %v", err))
+	}
+
+	// Validate required fields
+	requiredFields := map[string]string{
+		"consentVersion": consentVersion,
+		"ipAddress":      ipAddress,
+		"userAgent":      userAgent,
+	}
+	if err := shared.ValidateRequired(requiredFields); err != nil {
+		return shim.Error(fmt.Sprintf("Validation failed: %v", err))
+	}
+
+	// Validate IP address format (basic validation)
+	if err := shared.ValidateStringLength(ipAddress, 7, 45, "ipAddress"); err != nil {
+		return shim.Error(fmt.Sprintf("Invalid IP address: %v", err))
+	}
+
+	// Validate user agent
+	if err := shared.ValidateStringLength(userAgent, 10, 500, "userAgent"); err != nil {
+		return shim.Error(fmt.Sprintf("Invalid user agent: %v", err))
+	}
+
+	// Create consent preferences
+	now := time.Now()
+	consentPrefs := ConsentPreferences{
+		DataSharing:            dataSharing,
+		MarketingCommunication: marketingCommunication,
+		ThirdPartySharing:      thirdPartySharing,
+		CreditBureauSharing:    creditBureauSharing,
+		RegulatoryReporting:    regulatoryReporting,
+		ConsentDate:            now,
+		ExpiryDate:             now.AddDate(1, 0, 0), // 1 year expiry
+		ConsentVersion:         consentVersion,
+		IPAddress:              ipAddress,
+		UserAgent:              userAgent,
+	}
+
+	// Convert consent preferences to JSON
+	consentJSON, err := json.Marshal(consentPrefs)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal consent preferences: %v", err))
+	}
+
+	// Record history entry for previous consent
+	if err := shared.RecordHistoryEntry(stub, customerID, "Customer", "UPDATE", "consentPreferences", existingCustomer.ConsentPreferences, string(consentJSON), actorID); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to record history: %v", err))
+	}
+
+	// Update customer with new consent preferences
+	existingCustomer.ConsentPreferences = string(consentJSON)
+	existingCustomer.LastUpdated = now
+	existingCustomer.UpdatedByActor = actorID
+	existingCustomer.Version++
+
+	// Store updated customer
+	if err := shared.PutStateAsJSON(stub, customerID, existingCustomer); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to update customer: %v", err))
+	}
+
+	// Emit consent recorded event
+	event := CustomerEvent{
+		EventType:  "CONSENT_RECORDED",
+		CustomerID: customerID,
+		ActorID:    actorID,
+		Timestamp:  now,
+		Details:    fmt.Sprintf("Consent preferences recorded for customer %s", customerID),
+	}
+	if err := shared.EmitEvent(stub, "ConsentRecorded", event); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to emit event: %v", err))
+	}
+
+	// Return success with consent preferences
+	return shim.Success(consentJSON)
+}
+
+// UpdateConsent updates existing consent preferences for a customer
+func (t *CustomerChaincode) UpdateConsent(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Validate arguments
+	if len(args) != 10 {
+		return shim.Error("Incorrect number of arguments. Expecting 10: customerID, dataSharing, marketingCommunication, thirdPartySharing, creditBureauSharing, regulatoryReporting, consentVersion, ipAddress, userAgent, actorID")
+	}
+
+	customerID := args[0]
+	dataSharing := args[1] == "true"
+	marketingCommunication := args[2] == "true"
+	thirdPartySharing := args[3] == "true"
+	creditBureauSharing := args[4] == "true"
+	regulatoryReporting := args[5] == "true"
+	consentVersion := args[6]
+	ipAddress := args[7]
+	userAgent := args[8]
+	actorID := args[9]
+
+	// Validate actor permissions
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionUpdateCustomer)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Get existing customer
+	var existingCustomer Customer
+	if err := shared.GetStateAsJSON(stub, customerID, &existingCustomer); err != nil {
+		return shim.Error(fmt.Sprintf("Customer not found: %v", err))
+	}
+
+	// Parse existing consent preferences
+	var existingConsent ConsentPreferences
+	if existingCustomer.ConsentPreferences != "" && existingCustomer.ConsentPreferences != "{}" {
+		if err := json.Unmarshal([]byte(existingCustomer.ConsentPreferences), &existingConsent); err != nil {
+			return shim.Error(fmt.Sprintf("Failed to parse existing consent: %v", err))
+		}
+	}
+
+	// Validate required fields
+	requiredFields := map[string]string{
+		"consentVersion": consentVersion,
+		"ipAddress":      ipAddress,
+		"userAgent":      userAgent,
+	}
+	if err := shared.ValidateRequired(requiredFields); err != nil {
+		return shim.Error(fmt.Sprintf("Validation failed: %v", err))
+	}
+
+	// Validate IP address format (basic validation)
+	if err := shared.ValidateStringLength(ipAddress, 7, 45, "ipAddress"); err != nil {
+		return shim.Error(fmt.Sprintf("Invalid IP address: %v", err))
+	}
+
+	// Validate user agent
+	if err := shared.ValidateStringLength(userAgent, 10, 500, "userAgent"); err != nil {
+		return shim.Error(fmt.Sprintf("Invalid user agent: %v", err))
+	}
+
+	// Create updated consent preferences
+	now := time.Now()
+	updatedConsent := ConsentPreferences{
+		DataSharing:            dataSharing,
+		MarketingCommunication: marketingCommunication,
+		ThirdPartySharing:      thirdPartySharing,
+		CreditBureauSharing:    creditBureauSharing,
+		RegulatoryReporting:    regulatoryReporting,
+		ConsentDate:            now,
+		ExpiryDate:             now.AddDate(1, 0, 0), // 1 year expiry
+		ConsentVersion:         consentVersion,
+		IPAddress:              ipAddress,
+		UserAgent:              userAgent,
+	}
+
+	// Convert consent preferences to JSON
+	consentJSON, err := json.Marshal(updatedConsent)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal consent preferences: %v", err))
+	}
+
+	// Record history entry for consent update
+	if err := shared.RecordHistoryEntry(stub, customerID, "Customer", "UPDATE", "consentPreferences", existingCustomer.ConsentPreferences, string(consentJSON), actorID); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to record history: %v", err))
+	}
+
+	// Update customer with new consent preferences
+	existingCustomer.ConsentPreferences = string(consentJSON)
+	existingCustomer.LastUpdated = now
+	existingCustomer.UpdatedByActor = actorID
+	existingCustomer.Version++
+
+	// Store updated customer
+	if err := shared.PutStateAsJSON(stub, customerID, existingCustomer); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to update customer: %v", err))
+	}
+
+	// Emit consent updated event
+	event := CustomerEvent{
+		EventType:  "CONSENT_UPDATED",
+		CustomerID: customerID,
+		ActorID:    actorID,
+		Timestamp:  now,
+		Details:    fmt.Sprintf("Consent preferences updated for customer %s", customerID),
+	}
+	if err := shared.EmitEvent(stub, "ConsentUpdated", event); err != nil {
+		return shim.Error(fmt.Sprintf("Failed to emit event: %v", err))
+	}
+
+	// Return success with updated consent preferences
+	return shim.Success(consentJSON)
+}
+
+// GetConsent retrieves consent preferences for a customer with proper access controls
+func (t *CustomerChaincode) GetConsent(stub shim.ChaincodeStubInterface, args []string) peer.Response {
+	// Validate arguments
+	if len(args) != 2 {
+		return shim.Error("Incorrect number of arguments. Expecting 2: customerID, actorID")
+	}
+
+	customerID := args[0]
+	actorID := args[1]
+
+	// Validate actor permissions - consent data requires customer view permission
+	_, err := shared.ValidateActorAccess(stub, actorID, shared.PermissionViewCustomer)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Access denied: %v", err))
+	}
+
+	// Get customer from ledger
+	var customer Customer
+	if err := shared.GetStateAsJSON(stub, customerID, &customer); err != nil {
+		return shim.Error(fmt.Sprintf("Customer not found: %v", err))
+	}
+
+	// Parse consent preferences
+	var consentPrefs ConsentPreferences
+	if customer.ConsentPreferences != "" && customer.ConsentPreferences != "{}" {
+		if err := json.Unmarshal([]byte(customer.ConsentPreferences), &consentPrefs); err != nil {
+			return shim.Error(fmt.Sprintf("Failed to parse consent preferences: %v", err))
+		}
+	} else {
+		// Return empty consent if none exists
+		consentPrefs = ConsentPreferences{}
+	}
+
+	// Return consent data
+	consentJSON, err := json.Marshal(consentPrefs)
+	if err != nil {
+		return shim.Error(fmt.Sprintf("Failed to marshal consent preferences: %v", err))
+	}
+
+	return shim.Success(consentJSON)
+}
+
+// ValidateConsentForDataSharing validates if customer has given consent for specific data sharing operation
+func (t *CustomerChaincode) ValidateConsentForDataSharing(stub shim.ChaincodeStubInterface, customerID string, operationType string) error {
+	// Get customer from ledger
+	var customer Customer
+	if err := shared.GetStateAsJSON(stub, customerID, &customer); err != nil {
+		return fmt.Errorf("customer not found: %v", err)
+	}
+
+	// Parse consent preferences
+	var consentPrefs ConsentPreferences
+	if customer.ConsentPreferences != "" && customer.ConsentPreferences != "{}" {
+		if err := json.Unmarshal([]byte(customer.ConsentPreferences), &consentPrefs); err != nil {
+			return fmt.Errorf("failed to parse consent preferences: %v", err)
+		}
+	} else {
+		return fmt.Errorf("no consent preferences found for customer %s", customerID)
+	}
+
+	// Check if consent has expired
+	if time.Now().After(consentPrefs.ExpiryDate) {
+		return fmt.Errorf("consent has expired for customer %s", customerID)
+	}
+
+	// Validate consent based on operation type
+	switch operationType {
+	case "DATA_SHARING":
+		if !consentPrefs.DataSharing {
+			return fmt.Errorf("customer %s has not consented to data sharing", customerID)
+		}
+	case "MARKETING_COMMUNICATION":
+		if !consentPrefs.MarketingCommunication {
+			return fmt.Errorf("customer %s has not consented to marketing communication", customerID)
+		}
+	case "THIRD_PARTY_SHARING":
+		if !consentPrefs.ThirdPartySharing {
+			return fmt.Errorf("customer %s has not consented to third party sharing", customerID)
+		}
+	case "CREDIT_BUREAU_SHARING":
+		if !consentPrefs.CreditBureauSharing {
+			return fmt.Errorf("customer %s has not consented to credit bureau sharing", customerID)
+		}
+	case "REGULATORY_REPORTING":
+		if !consentPrefs.RegulatoryReporting {
+			return fmt.Errorf("customer %s has not consented to regulatory reporting", customerID)
+		}
+	default:
+		return fmt.Errorf("unknown operation type: %s", operationType)
+	}
+
+	return nil
 }
 
 func main() {
