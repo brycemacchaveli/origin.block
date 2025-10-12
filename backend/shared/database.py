@@ -633,6 +633,63 @@ class DatabaseUtilities:
             return history
 
 
+    def create_loan_document(self, document_data: Dict[str, Any]) -> LoanDocumentModel:
+        """Create a new loan document."""
+        with self.db_manager.session_scope() as session:
+            document = LoanDocumentModel(**document_data)
+            session.add(document)
+            session.flush()  # Get the ID
+            session.refresh(document)
+            return document
+    
+    def get_loan_documents(self, loan_application_id: str) -> List[LoanDocumentModel]:
+        """Get all documents for a loan application."""
+        with self.db_manager.session_scope() as session:
+            # First get the loan application to get the database ID
+            loan = session.query(LoanApplicationModel).filter(
+                LoanApplicationModel.loan_application_id == loan_application_id
+            ).first()
+            
+            if not loan:
+                return []
+            
+            documents = session.query(LoanDocumentModel).filter(
+                LoanDocumentModel.loan_application_id == loan.id
+            ).order_by(LoanDocumentModel.created_at.desc()).all()
+            
+            return documents
+    
+    def get_loan_document_by_id(self, document_id: int) -> Optional[LoanDocumentModel]:
+        """Get a loan document by ID."""
+        with self.db_manager.session_scope() as session:
+            document = session.query(LoanDocumentModel).filter(
+                LoanDocumentModel.id == document_id
+            ).first()
+            return document
+    
+    def update_document_verification_status(
+        self, 
+        document_id: int, 
+        verification_status: str,
+        blockchain_record_hash: Optional[str] = None
+    ) -> bool:
+        """Update document verification status."""
+        with self.db_manager.session_scope() as session:
+            document = session.query(LoanDocumentModel).filter(
+                LoanDocumentModel.id == document_id
+            ).first()
+            
+            if not document:
+                return False
+            
+            document.verification_status = verification_status
+            if blockchain_record_hash:
+                document.blockchain_record_hash = blockchain_record_hash
+            document.updated_at = datetime.utcnow()
+            
+            return True
+
+
 # Global database manager instance
 db_manager = DatabaseManager()
 db_utils = DatabaseUtilities(db_manager)
