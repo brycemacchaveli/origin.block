@@ -400,9 +400,15 @@ class DatabaseUtilities:
     def get_customer_by_customer_id(self, customer_id: str) -> Optional[CustomerModel]:
         """Get customer by customer_id."""
         with self.db_manager.session_scope() as session:
-            return session.query(CustomerModel).filter(
+            customer = session.query(CustomerModel).filter(
                 CustomerModel.customer_id == customer_id
             ).first()
+            if customer:
+                # Load all attributes to avoid lazy loading issues
+                session.refresh(customer)
+                # Detach from session
+                session.expunge(customer)
+            return customer
     
     def get_loan_by_loan_id(self, loan_application_id: str) -> Optional[LoanApplicationModel]:
         """Get loan application by loan_application_id."""
@@ -413,8 +419,11 @@ class DatabaseUtilities:
             if loan:
                 # Load all attributes to avoid lazy loading issues
                 session.refresh(loan)
+                # Load customer relationship
+                if loan.customer:
+                    session.refresh(loan.customer)
                 # Detach from session
-                session.expunge(loan)
+                session.expunge_all()
             return loan
     
     def get_compliance_events_by_entity(
@@ -465,9 +474,14 @@ class DatabaseUtilities:
             session.add(loan)
             session.flush()  # Get the ID
             session.refresh(loan)  # Refresh to get all attributes
-            # Detach from session to avoid DetachedInstanceError
-            session.expunge(loan)
-            return loan
+            
+            # Create a detached copy with all the data we need
+            loan_copy = LoanApplicationModel()
+            for key, value in loan.__dict__.items():
+                if not key.startswith('_'):
+                    setattr(loan_copy, key, value)
+            
+            return loan_copy
     
     def create_compliance_event(self, event_data: Dict[str, Any]) -> ComplianceEventModel:
         """Create a new compliance event."""
