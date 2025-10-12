@@ -471,3 +471,217 @@ class TestValidation:
         customer = CustomerCreate(first_name="John", last_name="Doe")
         assert customer.first_name == "John"
         assert customer.last_name == "Doe"
+
+
+class TestConsentManagement:
+    """Test consent management endpoints."""
+    
+    @pytest.fixture
+    def consent_actor(self):
+        """Create test actor with consent permissions."""
+        from shared.auth import actor_manager
+        
+        actor = Actor(
+            actor_id="consent_actor_001",
+            actor_type=ActorType.INTERNAL_USER,
+            actor_name="Consent Manager",
+            role=Role.CUSTOMER_SERVICE_REP,
+            permissions={Permission.MANAGE_CUSTOMER_CONSENT}
+        )
+        
+        # Add actor to the actor manager
+        actor_manager._actors[actor.actor_id] = actor
+        
+        return actor
+    
+    @pytest.fixture
+    def consent_auth_headers(self, consent_actor):
+        """Create authentication headers for consent requests."""
+        token = jwt_manager.create_access_token(consent_actor)
+        return {"Authorization": f"Bearer {token}"}
+    
+    @pytest.fixture
+    def sample_consent_data(self):
+        """Sample consent data for testing."""
+        return {
+            "data_sharing": True,
+            "marketing": False,
+            "analytics": True,
+            "third_party_sharing": False,
+            "retention_period": 24
+        }
+    
+    @patch('customer_mastery.api.db_utils')
+    @patch('customer_mastery.api.get_fabric_gateway')
+    def test_record_customer_consent_success(self, mock_gateway, mock_db_utils, 
+                                           client, consent_auth_headers, sample_consent_data, 
+                                           mock_db_customer, mock_db_actor):
+        """Test successful consent recording."""
+        # Setup mocks
+        mock_db_utils.get_customer_by_customer_id.return_value = mock_db_customer
+        mock_db_utils.get_actor_by_actor_id.return_value = mock_db_actor
+        
+        # Mock database session
+        mock_session = Mock()
+        mock_db_customer_query = Mock()
+        mock_db_customer_query.first.return_value = mock_db_customer
+        mock_session.query.return_value.filter.return_value = mock_db_customer_query
+        mock_db_utils.db_manager.session_scope.return_value.__enter__.return_value = mock_session
+        mock_db_utils.db_manager.session_scope.return_value.__exit__.return_value = None
+        
+        # Mock blockchain interaction
+        mock_gateway_instance = AsyncMock()
+        mock_chaincode_client = AsyncMock()
+        mock_chaincode_client.invoke_chaincode.return_value = {
+            "transaction_id": "tx_consent_123",
+            "status": "SUCCESS"
+        }
+        mock_gateway.return_value = mock_gateway_instance
+        
+        with patch('customer_mastery.api.ChaincodeClient', return_value=mock_chaincode_client):
+            response = client.post(
+                "/api/v1/customers/CUST_123456789ABC/consent",
+                json=sample_consent_data,
+                headers=consent_auth_headers
+            )
+        
+        assert response.status_code == status.HTTP_201_CREATED
+        data = response.json()
+        assert data["customer_id"] == "CUST_123456789ABC"
+        assert data["consent_preferences"]["data_sharing"] == True
+        assert data["consent_preferences"]["marketing"] == False
+        assert "last_updated" in data
+        assert "recorded_by" in data
+    
+    @patch('customer_mastery.api.db_utils')
+    def test_record_consent_customer_not_found(self, mock_db_utils, client, consent_auth_headers, sample_consent_data):
+        """Test consent recording when customer doesn't exist."""
+        mock_db_utils.get_customer_by_customer_id.return_value = None
+        
+        response = client.post(
+            "/api/v1/customers/NONEXISTENT/consent",
+            json=sample_consent_data,
+            headers=consent_auth_headers
+        )
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert "not found" in response.json()["detail"]
+    
+    @patch('customer_mastery.api.db_utils')
+    def test_get_customer_consent_success(self, mock_db_utils, client, consent_auth_headers, mock_db_customer):
+        """Test successful consent retrieval."""
+        # Set up consent preferences
+        mock_db_customer.consent_preferences = {
+            "data_sharing": True,
+            "marketing": False,
+            "analytics": True
+        }
+        mock_db_utils.get_customer_by_customer_id.return_value = mock_db_customer
+        mock_db_utils.get_customer_history.return_value = []
+        
+        response = client.get(
+            "/api/v1/customers/CUST_123456789ABC/consent",
+            headers=consent_auth_headers
+        )
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["customer_id"] == "CUST_123456789ABC"
+        assert data["consent_preferences"]["data_sharing"] == True
+        assert data["consent_preferences"]["marketing"] == False
+    
+    @patch('customer_mastery.api.db_utils')
+    def test_get_consent_customer_not_found(self, mock_db_utils, client, consent_auth_headers):
+        """Test consent retrieval when customer doesn't exist."""
+        mock_db_utils.get_customer_by_customer_id.return_value = None
+        
+        response = client.get(
+            "/api/v1/customers/NONEXISTENT/consent",
+            headers=consent_auth_headers
+        )
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert "not found" in response.json()["detail"]
+    
+    @patch('customer_mastery.api.db_utils')
+    @patch('customer_mastery.api.get_fabric_gateway')
+    def test_update_customer_consent_success(self, mock_gateway, mock_db_utils, 
+                                           client, consent_auth_headers, sample_consent_data, 
+                                           mock_db_customer, mock_db_actor):
+        """Test successful consent update."""
+        # Setup mocks
+        mock_db_customer.consent_preferences = {"data_sharing": False, "marketing": True}
+        mock_db_utils.get_customer_by_customer_id.return_value = mock_db_customer
+        mock_db_utils.get_actor_by_actor_id.return_value = mock_db_actor
+        
+        # Mock database session
+        mock_session = Mock()
+        mock_db_customer_query = Mock()
+        mock_db_customer_query.first.return_value = mock_db_customer
+        mock_session.query.return_value.filter.return_value = mock_db_customer_query
+        mock_db_utils.db_manager.session_scope.return_value.__enter__.return_value = mock_session
+        mock_db_utils.db_manager.session_scope.return_value.__exit__.return_value = None
+        
+        # Mock blockchain interaction
+        mock_gateway_instance = AsyncMock()
+        mock_chaincode_client = AsyncMock()
+        mock_chaincode_client.invoke_chaincode.return_value = {
+            "transaction_id": "tx_consent_update_123",
+            "status": "SUCCESS"
+        }
+        mock_gateway.return_value = mock_gateway_instance
+        
+        with patch('customer_mastery.api.ChaincodeClient', return_value=mock_chaincode_client):
+            response = client.put(
+                "/api/v1/customers/CUST_123456789ABC/consent",
+                json=sample_consent_data,
+                headers=consent_auth_headers
+            )
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["customer_id"] == "CUST_123456789ABC"
+        assert data["consent_preferences"]["data_sharing"] == True
+        assert data["consent_preferences"]["marketing"] == False
+    
+    def test_consent_unauthorized(self, client, sample_consent_data):
+        """Test consent operations without authentication."""
+        customer_id = "CUST_123456789ABC"
+        
+        # Test POST
+        response = client.post(f"/api/v1/customers/{customer_id}/consent", json=sample_consent_data)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        
+        # Test GET
+        response = client.get(f"/api/v1/customers/{customer_id}/consent")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        
+        # Test PUT
+        response = client.put(f"/api/v1/customers/{customer_id}/consent", json=sample_consent_data)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+    
+    def test_consent_validation(self):
+        """Test consent preferences validation."""
+        from customer_mastery.api import ConsentPreferences
+        
+        # Valid consent data
+        valid_consent = {
+            "data_sharing": True,
+            "marketing": False,
+            "analytics": True,
+            "third_party_sharing": False,
+            "retention_period": 24
+        }
+        consent = ConsentPreferences(**valid_consent)
+        assert consent.data_sharing == True
+        assert consent.marketing == False
+        assert consent.retention_period == 24
+        
+        # Test with additional fields (should be allowed due to extra="allow")
+        extended_consent = {
+            **valid_consent,
+            "custom_field": "custom_value"
+        }
+        consent = ConsentPreferences(**extended_consent)
+        assert hasattr(consent, 'custom_field')
+        assert consent.custom_field == "custom_value"

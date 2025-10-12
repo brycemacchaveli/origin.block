@@ -501,3 +501,310 @@ async def get_customer_history(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve customer history: {str(e)}"
         )
+
+
+@router.post("/{customer_id}/consent", response_model=ConsentResponse, status_code=status.HTTP_201_CREATED)
+async def record_customer_consent(
+    customer_id: str,
+    consent_data: ConsentPreferences,
+    current_user: Actor = Depends(require_permissions(Permission.MANAGE_CUSTOMER_CONSENT))
+):
+    """
+    Record customer consent preferences.
+    
+    Records consent preferences on both blockchain and operational database,
+    ensuring immutable consent tracking for compliance purposes.
+    
+    Requirements: 2.6, 4.2
+    """
+    try:
+        logger.info("Recording customer consent", 
+                   customer_id=customer_id, 
+                   actor_id=current_user.actor_id)
+        
+        # Verify customer exists
+        customer = db_utils.get_customer_by_customer_id(customer_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer {customer_id} not found"
+            )
+        
+        # Get actor for foreign key
+        actor = db_utils.get_actor_by_actor_id(current_user.actor_id)
+        if not actor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Actor not found in database"
+            )
+        
+        # Update consent preferences in database
+        consent_dict = consent_data.dict()
+        
+        with db_utils.db_manager.session_scope() as session:
+            db_customer = session.query(CustomerModel).filter(
+                CustomerModel.customer_id == customer_id
+            ).first()
+            
+            if not db_customer:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Customer {customer_id} not found"
+                )
+            
+            old_consent = db_customer.consent_preferences or {}
+            db_customer.consent_preferences = consent_dict
+            db_customer.updated_at = datetime.utcnow()
+            
+            # Record consent on blockchain
+            blockchain_transaction_id = None
+            try:
+                gateway = await get_fabric_gateway()
+                chaincode_client = ChaincodeClient(gateway, ChaincodeType.CUSTOMER)
+                blockchain_result = await chaincode_client.invoke_chaincode(
+                    "customer",
+                    "RecordConsent",
+                    [customer_id, json.dumps(consent_dict)]
+                )
+                
+                blockchain_transaction_id = blockchain_result.get("transaction_id")
+                
+                logger.info("Consent recorded on blockchain", 
+                           customer_id=customer_id,
+                           transaction_id=blockchain_transaction_id)
+                
+            except FabricError as e:
+                logger.error("Failed to record consent on blockchain", 
+                            customer_id=customer_id, 
+                            error=str(e))
+                # Continue with database update even if blockchain fails
+            
+            # Create history record
+            history_data = {
+                "customer_id": db_customer.id,
+                "change_type": "CONSENT_UPDATE",
+                "field_name": "consent_preferences",
+                "old_value": json.dumps(old_consent),
+                "new_value": json.dumps(consent_dict),
+                "changed_by_actor_id": actor.id,
+                "blockchain_transaction_id": blockchain_transaction_id
+            }
+            history = CustomerHistoryModel(**history_data)
+            session.add(history)
+            
+            session.refresh(db_customer)
+        
+        logger.info("Customer consent recorded successfully", customer_id=customer_id)
+        
+        return ConsentResponse(
+            customer_id=customer_id,
+            consent_preferences=consent_data,
+            last_updated=datetime.utcnow(),
+            recorded_by=current_user.actor_id
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to record customer consent", 
+                    customer_id=customer_id, 
+                    error=str(e), 
+                    actor_id=current_user.actor_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to record customer consent: {str(e)}"
+        )
+
+
+@router.get("/{customer_id}/consent", response_model=ConsentResponse)
+async def get_customer_consent(
+    customer_id: str,
+    current_user: Actor = Depends(require_permissions(Permission.MANAGE_CUSTOMER_CONSENT))
+):
+    """
+    Retrieve customer consent preferences.
+    
+    Returns current consent preferences from the operational database
+    with proper access control validation.
+    
+    Requirements: 2.6, 4.2
+    """
+    try:
+        logger.info("Retrieving customer consent", 
+                   customer_id=customer_id, 
+                   actor_id=current_user.actor_id)
+        
+        # Get customer from database
+        customer = db_utils.get_customer_by_customer_id(customer_id)
+        
+        if not customer:
+            logger.warning("Customer not found", customer_id=customer_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer {customer_id} not found"
+            )
+        
+        # Get consent preferences
+        consent_preferences = customer.consent_preferences or {}
+        
+        # Find the most recent consent update from history
+        history_records = db_utils.get_customer_history(customer_id)
+        last_consent_update = None
+        recorded_by = "system"
+        
+        for record in history_records:
+            if record.change_type == "CONSENT_UPDATE":
+                last_consent_update = record.timestamp
+                # Get the actor who made the change
+                with db_utils.db_manager.session_scope() as session:
+                    actor = session.query(ActorModel).filter(
+                        ActorModel.id == record.changed_by_actor_id
+                    ).first()
+                    if actor:
+                        recorded_by = actor.actor_id
+                break
+        
+        logger.info("Customer consent retrieved successfully", customer_id=customer_id)
+        
+        return ConsentResponse(
+            customer_id=customer_id,
+            consent_preferences=ConsentPreferences(**consent_preferences),
+            last_updated=last_consent_update or customer.updated_at,
+            recorded_by=recorded_by
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to retrieve customer consent", 
+                    customer_id=customer_id, 
+                    error=str(e), 
+                    actor_id=current_user.actor_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve customer consent: {str(e)}"
+        )
+
+
+@router.put("/{customer_id}/consent", response_model=ConsentResponse)
+async def update_customer_consent(
+    customer_id: str,
+    consent_data: ConsentPreferences,
+    current_user: Actor = Depends(require_permissions(Permission.MANAGE_CUSTOMER_CONSENT))
+):
+    """
+    Update customer consent preferences.
+    
+    Updates consent preferences in both blockchain and operational database,
+    maintaining complete audit trail for compliance purposes.
+    
+    Requirements: 2.6, 4.2
+    """
+    try:
+        logger.info("Updating customer consent", 
+                   customer_id=customer_id, 
+                   actor_id=current_user.actor_id)
+        
+        # Verify customer exists
+        customer = db_utils.get_customer_by_customer_id(customer_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer {customer_id} not found"
+            )
+        
+        # Get actor for foreign key
+        actor = db_utils.get_actor_by_actor_id(current_user.actor_id)
+        if not actor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Actor not found in database"
+            )
+        
+        # Update consent preferences in database
+        consent_dict = consent_data.dict()
+        
+        with db_utils.db_manager.session_scope() as session:
+            db_customer = session.query(CustomerModel).filter(
+                CustomerModel.customer_id == customer_id
+            ).first()
+            
+            if not db_customer:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Customer {customer_id} not found"
+                )
+            
+            old_consent = db_customer.consent_preferences or {}
+            
+            # Check if there are actual changes
+            if old_consent == consent_dict:
+                logger.info("No changes detected in consent preferences", customer_id=customer_id)
+                return ConsentResponse(
+                    customer_id=customer_id,
+                    consent_preferences=consent_data,
+                    last_updated=db_customer.updated_at,
+                    recorded_by=current_user.actor_id
+                )
+            
+            db_customer.consent_preferences = consent_dict
+            db_customer.updated_at = datetime.utcnow()
+            
+            # Update consent on blockchain
+            blockchain_transaction_id = None
+            try:
+                gateway = await get_fabric_gateway()
+                chaincode_client = ChaincodeClient(gateway, ChaincodeType.CUSTOMER)
+                blockchain_result = await chaincode_client.invoke_chaincode(
+                    "customer",
+                    "UpdateConsent",
+                    [customer_id, json.dumps(consent_dict)]
+                )
+                
+                blockchain_transaction_id = blockchain_result.get("transaction_id")
+                
+                logger.info("Consent updated on blockchain", 
+                           customer_id=customer_id,
+                           transaction_id=blockchain_transaction_id)
+                
+            except FabricError as e:
+                logger.error("Failed to update consent on blockchain", 
+                            customer_id=customer_id, 
+                            error=str(e))
+                # Continue with database update even if blockchain fails
+            
+            # Create history record
+            history_data = {
+                "customer_id": db_customer.id,
+                "change_type": "CONSENT_UPDATE",
+                "field_name": "consent_preferences",
+                "old_value": json.dumps(old_consent),
+                "new_value": json.dumps(consent_dict),
+                "changed_by_actor_id": actor.id,
+                "blockchain_transaction_id": blockchain_transaction_id
+            }
+            history = CustomerHistoryModel(**history_data)
+            session.add(history)
+            
+            session.refresh(db_customer)
+        
+        logger.info("Customer consent updated successfully", customer_id=customer_id)
+        
+        return ConsentResponse(
+            customer_id=customer_id,
+            consent_preferences=consent_data,
+            last_updated=datetime.utcnow(),
+            recorded_by=current_user.actor_id
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to update customer consent", 
+                    customer_id=customer_id, 
+                    error=str(e), 
+                    actor_id=current_user.actor_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update customer consent: {str(e)}"
+        )
