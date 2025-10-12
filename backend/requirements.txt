@@ -18,7 +18,7 @@ protobuf==4.25.1
 # Authentication and security
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
+python-multipart==0.0.20
 
 # HTTP client
 httpx==0.25.2
