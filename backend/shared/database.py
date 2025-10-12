@@ -7,7 +7,7 @@ and ComplianceEvent entities, along with database session management and utiliti
 
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union, Tuple
 from contextlib import contextmanager
 from enum import Enum
 
@@ -546,6 +546,71 @@ class DatabaseUtilities:
                 session.refresh(record)
                 session.expunge(record)
             return history
+    
+    def get_loan_history_paginated(
+        self, 
+        loan_application_id: str, 
+        page: int, 
+        page_size: int,
+        filter_criteria: Optional[Any] = None
+    ) -> tuple[List[LoanApplicationHistoryModel], int]:
+        """Get paginated loan application history with filtering."""
+        with self.db_manager.session_scope() as session:
+            loan = session.query(LoanApplicationModel).filter(
+                LoanApplicationModel.loan_application_id == loan_application_id
+            ).first()
+            
+            if not loan:
+                return [], 0
+            
+            # Build base query
+            query = session.query(LoanApplicationHistoryModel).filter(
+                LoanApplicationHistoryModel.loan_application_id == loan.id
+            )
+            
+            # Apply filters if provided
+            if filter_criteria:
+                if filter_criteria.change_type:
+                    query = query.filter(
+                        LoanApplicationHistoryModel.change_type == filter_criteria.change_type
+                    )
+                
+                if filter_criteria.actor_id:
+                    query = query.filter(
+                        LoanApplicationHistoryModel.changed_by_actor_id == filter_criteria.actor_id
+                    )
+                
+                if filter_criteria.from_date:
+                    query = query.filter(
+                        LoanApplicationHistoryModel.timestamp >= filter_criteria.from_date
+                    )
+                
+                if filter_criteria.to_date:
+                    query = query.filter(
+                        LoanApplicationHistoryModel.timestamp <= filter_criteria.to_date
+                    )
+                
+                if filter_criteria.status:
+                    query = query.filter(
+                        (LoanApplicationHistoryModel.previous_status == filter_criteria.status) |
+                        (LoanApplicationHistoryModel.new_status == filter_criteria.status)
+                    )
+            
+            # Get total count for pagination
+            total_count = query.count()
+            
+            # Apply pagination and ordering
+            offset = (page - 1) * page_size
+            history = query.order_by(
+                LoanApplicationHistoryModel.timestamp.desc()
+            ).offset(offset).limit(page_size).all()
+            
+            # Detach all history records from session
+            for record in history:
+                session.refresh(record)
+                session.expunge(record)
+            
+            return history, total_count
     
     def get_customer_history(self, customer_id: str) -> List[CustomerHistoryModel]:
         """Get customer history."""

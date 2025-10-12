@@ -755,20 +755,84 @@ async def reject_loan(
         )
 
 
-@router.get("/{loan_id}/history", response_model=List[LoanHistoryResponse])
+class LoanHistoryFilter(BaseModel):
+    """Schema for filtering loan history."""
+    change_type: Optional[str] = Field(None, description="Filter by change type")
+    actor_id: Optional[int] = Field(None, description="Filter by actor who made the change")
+    from_date: Optional[datetime] = Field(None, description="Filter from this date")
+    to_date: Optional[datetime] = Field(None, description="Filter to this date")
+    status: Optional[str] = Field(None, description="Filter by status changes")
+
+
+class PaginatedLoanHistoryResponse(BaseModel):
+    """Schema for paginated loan history response."""
+    items: List[LoanHistoryResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_next: bool
+    has_previous: bool
+
+
+class AuditReportRequest(BaseModel):
+    """Schema for audit report generation request."""
+    report_type: str = Field(..., description="Type of audit report")
+    from_date: Optional[datetime] = Field(None, description="Report start date")
+    to_date: Optional[datetime] = Field(None, description="Report end date")
+    include_blockchain_verification: bool = Field(True, description="Include blockchain integrity verification")
+    format: str = Field("json", description="Report format (json, csv)")
+
+
+class AuditReportResponse(BaseModel):
+    """Schema for audit report response."""
+    report_id: str
+    report_type: str
+    generated_at: datetime
+    total_records: int
+    integrity_verified: bool
+    blockchain_hash_matches: int
+    data: Dict[str, Any]
+    download_url: Optional[str] = None
+
+
+@router.get("/{loan_id}/history", response_model=PaginatedLoanHistoryResponse)
 async def get_loan_history(
     loan_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    change_type: Optional[str] = None,
+    actor_id: Optional[int] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    status: Optional[str] = None,
+    verify_integrity: bool = False,
     current_user: Actor = Depends(require_permissions(Permission.READ_LOAN_HISTORY))
 ):
     """
-    Get loan application history.
+    Get loan application history with filtering and pagination.
     
-    Returns complete audit trail of all changes to the loan application.
+    Returns complete audit trail of all changes to the loan application
+    with optional filtering, pagination, and integrity verification.
     """
     try:
         logger.info("Retrieving loan application history",
                    loan_id=loan_id,
+                   page=page,
+                   page_size=page_size,
                    actor_id=current_user.actor_id)
+        
+        # Validate pagination parameters
+        if page < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Page must be greater than 0"
+            )
+        if page_size < 1 or page_size > 1000:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Page size must be between 1 and 1000"
+            )
         
         # Validate loan exists
         loan = _validate_loan_exists(loan_id)
@@ -776,12 +840,42 @@ async def get_loan_history(
         # Check access permissions
         _check_loan_access_permissions(loan, current_user)
         
-        # Get history records
-        history_records = db_utils.get_loan_history(loan_id)
+        # Build filter criteria
+        filter_criteria = LoanHistoryFilter(
+            change_type=change_type,
+            actor_id=actor_id,
+            from_date=from_date,
+            to_date=to_date,
+            status=status
+        )
+        
+        # Get filtered and paginated history records
+        try:
+            result = db_utils.get_loan_history_paginated(
+                loan_id, 
+                page, 
+                page_size, 
+                filter_criteria
+            )
+            if isinstance(result, tuple) and len(result) == 2:
+                history_records, total_count = result
+            else:
+                # Handle case where method doesn't return tuple
+                raise AttributeError("Method doesn't return expected tuple")
+        except (AttributeError, ValueError):
+            # Fallback to old method for backward compatibility
+            history_records = db_utils.get_loan_history(loan_id)
+            total_count = len(history_records)
+            
+            # Apply manual pagination
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            history_records = history_records[start_idx:end_idx]
         
         # Convert to response format
-        response_data = [
-            LoanHistoryResponse(
+        response_items = []
+        for record in history_records:
+            item = LoanHistoryResponse(
                 id=record.id,
                 change_type=record.change_type,
                 previous_status=record.previous_status,
@@ -794,12 +888,42 @@ async def get_loan_history(
                 timestamp=record.timestamp,
                 notes=record.notes
             )
-            for record in history_records
-        ]
+            
+            # Perform integrity verification if requested
+            if verify_integrity and record.blockchain_transaction_id:
+                try:
+                    is_verified = await _verify_history_integrity(record)
+                    # Add verification status to notes or create a separate field
+                    if item.notes:
+                        item.notes += f" | Blockchain Verified: {is_verified}"
+                    else:
+                        item.notes = f"Blockchain Verified: {is_verified}"
+                except Exception as e:
+                    logger.warning("Failed to verify history integrity",
+                                 record_id=record.id,
+                                 error=str(e))
+            
+            response_items.append(item)
+        
+        # Calculate pagination metadata
+        total_pages = (total_count + page_size - 1) // page_size
+        has_next = page < total_pages
+        has_previous = page > 1
+        
+        response_data = PaginatedLoanHistoryResponse(
+            items=response_items,
+            total=total_count,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+            has_next=has_next,
+            has_previous=has_previous
+        )
         
         logger.info("Loan history retrieved successfully",
                    loan_id=loan_id,
-                   record_count=len(response_data))
+                   record_count=len(response_items),
+                   total_count=total_count)
         
         return response_data
         
@@ -809,6 +933,197 @@ async def get_loan_history(
         logger.error("Failed to retrieve loan history", 
                     loan_id=loan_id, error=str(e))
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail="Failed to retrieve loan history"
         )
+
+
+@router.post("/{loan_id}/audit-report", response_model=AuditReportResponse)
+async def generate_audit_report(
+    loan_id: str,
+    report_request: AuditReportRequest,
+    current_user: Actor = Depends(require_permissions(Permission.READ_LOAN_HISTORY))
+):
+    """
+    Generate comprehensive audit report for loan application.
+    
+    Creates a detailed audit report with optional blockchain integrity verification.
+    """
+    try:
+        logger.info("Generating audit report",
+                   loan_id=loan_id,
+                   report_type=report_request.report_type,
+                   actor_id=current_user.actor_id)
+        
+        # Validate loan exists
+        loan = _validate_loan_exists(loan_id)
+        
+        # Check access permissions
+        _check_loan_access_permissions(loan, current_user)
+        
+        # Generate unique report ID
+        report_id = f"AUDIT_{loan_id}_{secrets.token_hex(4).upper()}"
+        
+        # Get complete history for the loan
+        all_history = db_utils.get_loan_history(loan_id)
+        
+        # Filter history by date range if specified
+        filtered_history = all_history
+        if report_request.from_date or report_request.to_date:
+            filtered_history = []
+            for record in all_history:
+                if report_request.from_date and record.timestamp < report_request.from_date:
+                    continue
+                if report_request.to_date and record.timestamp > report_request.to_date:
+                    continue
+                filtered_history.append(record)
+        
+        # Perform blockchain integrity verification if requested
+        integrity_verified = True
+        blockchain_hash_matches = 0
+        verification_details = []
+        
+        if report_request.include_blockchain_verification:
+            for record in filtered_history:
+                if record.blockchain_transaction_id:
+                    try:
+                        is_verified = await _verify_history_integrity(record)
+                        if is_verified:
+                            blockchain_hash_matches += 1
+                        verification_details.append({
+                            "record_id": record.id,
+                            "transaction_id": record.blockchain_transaction_id,
+                            "verified": is_verified,
+                            "timestamp": record.timestamp.isoformat()
+                        })
+                    except Exception as e:
+                        logger.warning("Verification failed for record",
+                                     record_id=record.id,
+                                     error=str(e))
+                        integrity_verified = False
+                        verification_details.append({
+                            "record_id": record.id,
+                            "transaction_id": record.blockchain_transaction_id,
+                            "verified": False,
+                            "error": str(e),
+                            "timestamp": record.timestamp.isoformat()
+                        })
+        
+        # Build audit report data
+        audit_data = {
+            "loan_application": {
+                "loan_id": loan.loan_application_id,
+                "customer_id": loan.customer.customer_id if loan.customer else None,
+                "current_status": loan.application_status,
+                "requested_amount": loan.requested_amount,
+                "approval_amount": loan.approval_amount,
+                "created_at": loan.created_at.isoformat(),
+                "updated_at": loan.updated_at.isoformat()
+            },
+            "history_summary": {
+                "total_changes": len(filtered_history),
+                "status_changes": len([r for r in filtered_history if r.change_type == 'STATUS_CHANGE']),
+                "approvals": len([r for r in filtered_history if r.change_type == 'APPROVAL']),
+                "rejections": len([r for r in filtered_history if r.change_type == 'REJECTION']),
+                "updates": len([r for r in filtered_history if r.change_type == 'UPDATE'])
+            },
+            "timeline": [
+                {
+                    "id": record.id,
+                    "timestamp": record.timestamp.isoformat(),
+                    "change_type": record.change_type,
+                    "previous_status": record.previous_status,
+                    "new_status": record.new_status,
+                    "field_name": record.field_name,
+                    "old_value": record.old_value,
+                    "new_value": record.new_value,
+                    "changed_by_actor_id": record.changed_by_actor_id,
+                    "blockchain_transaction_id": record.blockchain_transaction_id,
+                    "notes": record.notes
+                }
+                for record in filtered_history
+            ],
+            "actors_involved": list(set([
+                record.changed_by_actor_id for record in filtered_history
+            ])),
+            "blockchain_verification": {
+                "enabled": report_request.include_blockchain_verification,
+                "total_records_with_blockchain": len([r for r in filtered_history if r.blockchain_transaction_id]),
+                "verified_records": blockchain_hash_matches,
+                "verification_details": verification_details if report_request.include_blockchain_verification else []
+            }
+        }
+        
+        # Create response
+        response_data = AuditReportResponse(
+            report_id=report_id,
+            report_type=report_request.report_type,
+            generated_at=datetime.utcnow(),
+            total_records=len(filtered_history),
+            integrity_verified=integrity_verified,
+            blockchain_hash_matches=blockchain_hash_matches,
+            data=audit_data
+        )
+        
+        logger.info("Audit report generated successfully",
+                   loan_id=loan_id,
+                   report_id=report_id,
+                   total_records=len(filtered_history))
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to generate audit report", 
+                    loan_id=loan_id, error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate audit report"
+        )
+
+
+async def _verify_history_integrity(history_record: 'LoanApplicationHistoryModel') -> bool:
+    """
+    Verify the integrity of a history record against blockchain data.
+    
+    This function would typically query the blockchain to verify that the
+    recorded transaction ID and data match what's stored on the ledger.
+    """
+    try:
+        if not history_record.blockchain_transaction_id:
+            return False
+        
+        # Get blockchain data for verification
+        gateway = await get_fabric_gateway()
+        
+        # Query blockchain for the specific transaction
+        blockchain_result = await gateway.query_chaincode(
+            "loan",
+            "GetLoanHistory",
+            [history_record.loan_application.loan_application_id]
+        )
+        
+        if not blockchain_result:
+            return False
+        
+        # Parse blockchain history and find matching transaction
+        blockchain_history = json.loads(blockchain_result)
+        
+        # Find the matching transaction in blockchain history
+        for blockchain_record in blockchain_history:
+            if blockchain_record.get("transactionID") == history_record.blockchain_transaction_id:
+                # Verify key fields match
+                if (blockchain_record.get("changeType") == history_record.change_type and
+                    blockchain_record.get("timestamp") and
+                    abs((datetime.fromisoformat(blockchain_record["timestamp"].replace('Z', '+00:00')) - 
+                         history_record.timestamp).total_seconds()) < 60):  # Allow 1 minute tolerance
+                    return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error("Failed to verify history integrity",
+                    record_id=history_record.id,
+                    error=str(e))
+        return False

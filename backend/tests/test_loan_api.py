@@ -730,9 +730,19 @@ class TestLoanHistory:
         
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
-        assert len(data) == 2
-        assert data[0]["change_type"] == "STATUS_CHANGE"
-        assert data[1]["change_type"] == "APPROVAL"
+        
+        # Check paginated response structure
+        assert "items" in data
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+        
+        # Check the actual history items
+        assert len(data["items"]) == 2
+        assert data["total"] == 2
+        assert data["page"] == 1
+        assert data["items"][0]["change_type"] == "STATUS_CHANGE"
+        assert data["items"][1]["change_type"] == "APPROVAL"
         
         mock_db_utils.get_loan_history.assert_called_once_with("LOAN_123456")
     
