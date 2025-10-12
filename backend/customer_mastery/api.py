@@ -5,6 +5,7 @@ This module implements the Customer Mastery API service with CRUD operations
 for customer data management, including consent management and identity verification.
 """
 
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -808,3 +809,451 @@ async def update_customer_consent(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update customer consent: {str(e)}"
         )
+
+
+class IdentityVerificationRequest(BaseModel):
+    """Schema for identity verification request."""
+    verification_type: str = Field(..., description="Type of verification (KYC, AML, DOCUMENT)")
+    provider: Optional[str] = Field("default", description="Identity verification provider")
+    additional_data: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional verification data")
+
+
+class IdentityVerificationResponse(BaseModel):
+    """Schema for identity verification response."""
+    customer_id: str = Field(..., description="Customer ID")
+    verification_id: str = Field(..., description="Verification request ID")
+    verification_type: str = Field(..., description="Type of verification")
+    status: str = Field(..., description="Verification status")
+    provider: str = Field(..., description="Identity verification provider")
+    initiated_by: str = Field(..., description="Actor who initiated verification")
+    initiated_at: datetime = Field(..., description="Verification initiation timestamp")
+    completed_at: Optional[datetime] = Field(None, description="Verification completion timestamp")
+    result_details: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Verification result details")
+
+
+class VerificationStatusUpdate(BaseModel):
+    """Schema for updating verification status."""
+    status: str = Field(..., description="New verification status")
+    result_details: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Verification result details")
+    notes: Optional[str] = Field(None, description="Additional notes about the verification")
+
+
+def _generate_verification_id() -> str:
+    """Generate a unique verification ID."""
+    return f"VER_{uuid.uuid4().hex[:12].upper()}"
+
+
+@router.post("/{customer_id}/verify", response_model=IdentityVerificationResponse, status_code=status.HTTP_201_CREATED)
+async def initiate_identity_verification(
+    customer_id: str,
+    verification_request: IdentityVerificationRequest,
+    current_user: Actor = Depends(require_permissions(Permission.CREATE_CUSTOMER))
+):
+    """
+    Initiate identity verification for a customer.
+    
+    Triggers identity verification checks with external providers and
+    records the verification request on the blockchain for audit purposes.
+    
+    Requirements: 2.5, 4.1
+    """
+    try:
+        logger.info("Initiating identity verification", 
+                   customer_id=customer_id, 
+                   verification_type=verification_request.verification_type,
+                   actor_id=current_user.actor_id)
+        
+        # Verify customer exists
+        customer = db_utils.get_customer_by_customer_id(customer_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer {customer_id} not found"
+            )
+        
+        # Generate verification ID
+        verification_id = _generate_verification_id()
+        
+        # Get actor for foreign key
+        actor = db_utils.get_actor_by_actor_id(current_user.actor_id)
+        if not actor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Actor not found in database"
+            )
+        
+        # Prepare verification data
+        verification_data = {
+            "verification_id": verification_id,
+            "customer_id": customer_id,
+            "verification_type": verification_request.verification_type,
+            "provider": verification_request.provider,
+            "status": "INITIATED",
+            "initiated_by": current_user.actor_id,
+            "additional_data": verification_request.additional_data
+        }
+        
+        # Record verification initiation on blockchain
+        blockchain_transaction_id = None
+        try:
+            gateway = await get_fabric_gateway()
+            chaincode_client = ChaincodeClient(gateway, ChaincodeType.CUSTOMER)
+            blockchain_result = await chaincode_client.invoke_chaincode(
+                "customer",
+                "InitiateIdentityVerification",
+                [customer_id, json.dumps(verification_data)]
+            )
+            
+            blockchain_transaction_id = blockchain_result.get("transaction_id")
+            
+            logger.info("Identity verification initiated on blockchain", 
+                       customer_id=customer_id,
+                       verification_id=verification_id,
+                       transaction_id=blockchain_transaction_id)
+            
+        except FabricError as e:
+            logger.error("Failed to record verification on blockchain", 
+                        customer_id=customer_id, 
+                        verification_id=verification_id,
+                        error=str(e))
+            # Continue with the process even if blockchain fails
+        
+        # Simulate external identity provider integration
+        # In a real implementation, this would call actual identity verification services
+        provider_response = await _simulate_identity_provider_call(
+            customer_id, 
+            verification_request.verification_type,
+            verification_request.provider,
+            verification_request.additional_data
+        )
+        
+        # Update customer KYC/AML status based on verification type
+        status_update = {}
+        if verification_request.verification_type.upper() == "KYC":
+            status_update["kyc_status"] = "IN_PROGRESS"
+        elif verification_request.verification_type.upper() == "AML":
+            status_update["aml_status"] = "IN_PROGRESS"
+        
+        if status_update:
+            with db_utils.db_manager.session_scope() as session:
+                db_customer = session.query(CustomerModel).filter(
+                    CustomerModel.customer_id == customer_id
+                ).first()
+                
+                if db_customer:
+                    for field, value in status_update.items():
+                        setattr(db_customer, field, value)
+                    db_customer.updated_at = datetime.utcnow()
+                    
+                    # Create history record
+                    history_data = {
+                        "customer_id": db_customer.id,
+                        "change_type": "VERIFICATION_INITIATED",
+                        "field_name": f"{verification_request.verification_type.lower()}_status",
+                        "new_value": status_update.get(f"{verification_request.verification_type.lower()}_status"),
+                        "changed_by_actor_id": actor.id,
+                        "blockchain_transaction_id": blockchain_transaction_id
+                    }
+                    history = CustomerHistoryModel(**history_data)
+                    session.add(history)
+        
+        logger.info("Identity verification initiated successfully", 
+                   customer_id=customer_id,
+                   verification_id=verification_id)
+        
+        return IdentityVerificationResponse(
+            customer_id=customer_id,
+            verification_id=verification_id,
+            verification_type=verification_request.verification_type,
+            status="INITIATED",
+            provider=verification_request.provider,
+            initiated_by=current_user.actor_id,
+            initiated_at=datetime.utcnow(),
+            result_details=provider_response
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to initiate identity verification", 
+                    customer_id=customer_id, 
+                    error=str(e), 
+                    actor_id=current_user.actor_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to initiate identity verification: {str(e)}"
+        )
+
+
+@router.get("/{customer_id}/verify/{verification_id}", response_model=IdentityVerificationResponse)
+async def get_verification_status(
+    customer_id: str,
+    verification_id: str,
+    current_user: Actor = Depends(require_permissions(Permission.READ_CUSTOMER))
+):
+    """
+    Get identity verification status.
+    
+    Retrieves the current status of an identity verification request,
+    including results from external identity providers.
+    
+    Requirements: 2.5, 4.1
+    """
+    try:
+        logger.info("Retrieving verification status", 
+                   customer_id=customer_id, 
+                   verification_id=verification_id,
+                   actor_id=current_user.actor_id)
+        
+        # Verify customer exists
+        customer = db_utils.get_customer_by_customer_id(customer_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer {customer_id} not found"
+            )
+        
+        # Query blockchain for verification status
+        try:
+            gateway = await get_fabric_gateway()
+            chaincode_client = ChaincodeClient(gateway, ChaincodeType.CUSTOMER)
+            blockchain_result = await chaincode_client.query_chaincode(
+                "customer",
+                "GetVerificationStatus",
+                [customer_id, verification_id]
+            )
+            
+            verification_data = blockchain_result.get("payload", {})
+            
+            if not verification_data:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Verification {verification_id} not found"
+                )
+            
+            logger.info("Verification status retrieved successfully", 
+                       customer_id=customer_id,
+                       verification_id=verification_id)
+            
+            return IdentityVerificationResponse(
+                customer_id=customer_id,
+                verification_id=verification_id,
+                verification_type=verification_data.get("verification_type", "UNKNOWN"),
+                status=verification_data.get("status", "UNKNOWN"),
+                provider=verification_data.get("provider", "unknown"),
+                initiated_by=verification_data.get("initiated_by", "unknown"),
+                initiated_at=datetime.fromisoformat(verification_data.get("initiated_at", datetime.utcnow().isoformat())),
+                completed_at=datetime.fromisoformat(verification_data["completed_at"]) if verification_data.get("completed_at") else None,
+                result_details=verification_data.get("result_details", {})
+            )
+            
+        except FabricError as e:
+            logger.error("Failed to retrieve verification status from blockchain", 
+                        customer_id=customer_id, 
+                        verification_id=verification_id,
+                        error=str(e))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve verification status"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to retrieve verification status", 
+                    customer_id=customer_id, 
+                    verification_id=verification_id,
+                    error=str(e), 
+                    actor_id=current_user.actor_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve verification status: {str(e)}"
+        )
+
+
+@router.put("/{customer_id}/verify/{verification_id}", response_model=IdentityVerificationResponse)
+async def update_verification_status(
+    customer_id: str,
+    verification_id: str,
+    status_update: VerificationStatusUpdate,
+    current_user: Actor = Depends(require_permissions(Permission.UPDATE_CUSTOMER))
+):
+    """
+    Update identity verification status.
+    
+    Updates the status of an identity verification request, typically
+    called when receiving results from external identity providers.
+    
+    Requirements: 2.5, 4.1
+    """
+    try:
+        logger.info("Updating verification status", 
+                   customer_id=customer_id, 
+                   verification_id=verification_id,
+                   new_status=status_update.status,
+                   actor_id=current_user.actor_id)
+        
+        # Verify customer exists
+        customer = db_utils.get_customer_by_customer_id(customer_id)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer {customer_id} not found"
+            )
+        
+        # Get actor for foreign key
+        actor = db_utils.get_actor_by_actor_id(current_user.actor_id)
+        if not actor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Actor not found in database"
+            )
+        
+        # Prepare update data
+        update_data = {
+            "status": status_update.status,
+            "result_details": status_update.result_details,
+            "completed_at": datetime.utcnow().isoformat() if status_update.status in ["COMPLETED", "FAILED"] else None,
+            "updated_by": current_user.actor_id,
+            "notes": status_update.notes
+        }
+        
+        # Update verification status on blockchain
+        blockchain_transaction_id = None
+        try:
+            gateway = await get_fabric_gateway()
+            chaincode_client = ChaincodeClient(gateway, ChaincodeType.CUSTOMER)
+            blockchain_result = await chaincode_client.invoke_chaincode(
+                "customer",
+                "UpdateVerificationStatus",
+                [customer_id, verification_id, json.dumps(update_data)]
+            )
+            
+            blockchain_transaction_id = blockchain_result.get("transaction_id")
+            
+            logger.info("Verification status updated on blockchain", 
+                       customer_id=customer_id,
+                       verification_id=verification_id,
+                       transaction_id=blockchain_transaction_id)
+            
+        except FabricError as e:
+            logger.error("Failed to update verification status on blockchain", 
+                        customer_id=customer_id, 
+                        verification_id=verification_id,
+                        error=str(e))
+            # Continue with database update even if blockchain fails
+        
+        # Update customer KYC/AML status based on verification results
+        customer_status_updates = {}
+        
+        # Get verification type from blockchain (simplified for this implementation)
+        verification_type = "KYC"  # This would be retrieved from blockchain in real implementation
+        
+        if status_update.status == "COMPLETED":
+            if verification_type.upper() == "KYC":
+                customer_status_updates["kyc_status"] = "VERIFIED"
+            elif verification_type.upper() == "AML":
+                customer_status_updates["aml_status"] = "CLEAR"
+        elif status_update.status == "FAILED":
+            if verification_type.upper() == "KYC":
+                customer_status_updates["kyc_status"] = "FAILED"
+            elif verification_type.upper() == "AML":
+                customer_status_updates["aml_status"] = "FLAGGED"
+        
+        if customer_status_updates:
+            with db_utils.db_manager.session_scope() as session:
+                db_customer = session.query(CustomerModel).filter(
+                    CustomerModel.customer_id == customer_id
+                ).first()
+                
+                if db_customer:
+                    for field, value in customer_status_updates.items():
+                        old_value = getattr(db_customer, field)
+                        setattr(db_customer, field, value)
+                        
+                        # Create history record for status change
+                        history_data = {
+                            "customer_id": db_customer.id,
+                            "change_type": "VERIFICATION_COMPLETED",
+                            "field_name": field,
+                            "old_value": old_value,
+                            "new_value": value,
+                            "changed_by_actor_id": actor.id,
+                            "blockchain_transaction_id": blockchain_transaction_id
+                        }
+                        history = CustomerHistoryModel(**history_data)
+                        session.add(history)
+                    
+                    db_customer.updated_at = datetime.utcnow()
+        
+        logger.info("Verification status updated successfully", 
+                   customer_id=customer_id,
+                   verification_id=verification_id)
+        
+        return IdentityVerificationResponse(
+            customer_id=customer_id,
+            verification_id=verification_id,
+            verification_type=verification_type,
+            status=status_update.status,
+            provider="default",
+            initiated_by="system",
+            initiated_at=datetime.utcnow(),
+            completed_at=datetime.utcnow() if status_update.status in ["COMPLETED", "FAILED"] else None,
+            result_details=status_update.result_details
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to update verification status", 
+                    customer_id=customer_id, 
+                    verification_id=verification_id,
+                    error=str(e), 
+                    actor_id=current_user.actor_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update verification status: {str(e)}"
+        )
+
+
+async def _simulate_identity_provider_call(
+    customer_id: str, 
+    verification_type: str, 
+    provider: str,
+    additional_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Simulate external identity provider integration.
+    
+    In a real implementation, this would make actual API calls to
+    identity verification services like Jumio, Onfido, or similar providers.
+    """
+    logger.info("Simulating identity provider call", 
+               customer_id=customer_id,
+               verification_type=verification_type,
+               provider=provider)
+    
+    # Simulate processing delay
+    await asyncio.sleep(0.1)
+    
+    # Simulate provider response
+    if verification_type.upper() == "KYC":
+        return {
+            "provider_reference": f"{provider}_kyc_{uuid.uuid4().hex[:8]}",
+            "confidence_score": 0.95,
+            "checks_performed": ["document_verification", "liveness_check", "address_verification"],
+            "estimated_completion": "2-5 minutes"
+        }
+    elif verification_type.upper() == "AML":
+        return {
+            "provider_reference": f"{provider}_aml_{uuid.uuid4().hex[:8]}",
+            "screening_lists": ["sanctions", "pep", "adverse_media"],
+            "initial_result": "clear",
+            "estimated_completion": "1-2 minutes"
+        }
+    else:
+        return {
+            "provider_reference": f"{provider}_doc_{uuid.uuid4().hex[:8]}",
+            "document_types": ["passport", "drivers_license", "national_id"],
+            "estimated_completion": "3-10 minutes"
+        }

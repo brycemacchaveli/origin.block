@@ -685,3 +685,268 @@ class TestConsentManagement:
         consent = ConsentPreferences(**extended_consent)
         assert hasattr(consent, 'custom_field')
         assert consent.custom_field == "custom_value"
+
+
+class TestIdentityVerification:
+    """Test identity verification endpoints."""
+    
+    @pytest.fixture
+    def verification_actor(self):
+        """Create test actor with verification permissions."""
+        from shared.auth import actor_manager
+        
+        actor = Actor(
+            actor_id="verification_actor_001",
+            actor_type=ActorType.INTERNAL_USER,
+            actor_name="Verification Manager",
+            role=Role.CUSTOMER_SERVICE_REP,
+            permissions={
+                Permission.CREATE_CUSTOMER,
+                Permission.READ_CUSTOMER,
+                Permission.UPDATE_CUSTOMER
+            }
+        )
+        
+        # Add actor to the actor manager
+        actor_manager._actors[actor.actor_id] = actor
+        
+        return actor
+    
+    @pytest.fixture
+    def verification_auth_headers(self, verification_actor):
+        """Create authentication headers for verification requests."""
+        token = jwt_manager.create_access_token(verification_actor)
+        return {"Authorization": f"Bearer {token}"}
+    
+    @pytest.fixture
+    def sample_verification_request(self):
+        """Sample verification request data for testing."""
+        return {
+            "verification_type": "KYC",
+            "provider": "test_provider",
+            "additional_data": {
+                "document_type": "passport",
+                "country": "US"
+            }
+        }
+    
+    @patch('customer_mastery.api.db_utils')
+    @patch('customer_mastery.api.get_fabric_gateway')
+    @patch('customer_mastery.api._simulate_identity_provider_call')
+    def test_initiate_identity_verification_success(self, mock_provider_call, mock_gateway, mock_db_utils, 
+                                                  client, verification_auth_headers, sample_verification_request, 
+                                                  mock_db_customer, mock_db_actor):
+        """Test successful identity verification initiation."""
+        # Setup mocks
+        mock_db_utils.get_customer_by_customer_id.return_value = mock_db_customer
+        mock_db_utils.get_actor_by_actor_id.return_value = mock_db_actor
+        
+        # Mock database session
+        mock_session = Mock()
+        mock_db_customer_query = Mock()
+        mock_db_customer_query.first.return_value = mock_db_customer
+        mock_session.query.return_value.filter.return_value = mock_db_customer_query
+        mock_db_utils.db_manager.session_scope.return_value.__enter__.return_value = mock_session
+        mock_db_utils.db_manager.session_scope.return_value.__exit__.return_value = None
+        
+        # Mock blockchain interaction
+        mock_gateway_instance = AsyncMock()
+        mock_chaincode_client = AsyncMock()
+        mock_chaincode_client.invoke_chaincode.return_value = {
+            "transaction_id": "tx_verification_123",
+            "status": "SUCCESS"
+        }
+        mock_gateway.return_value = mock_gateway_instance
+        
+        # Mock identity provider call
+        mock_provider_call.return_value = {
+            "provider_reference": "test_kyc_12345678",
+            "confidence_score": 0.95,
+            "checks_performed": ["document_verification", "liveness_check"],
+            "estimated_completion": "2-5 minutes"
+        }
+        
+        with patch('customer_mastery.api.ChaincodeClient', return_value=mock_chaincode_client):
+            response = client.post(
+                "/api/v1/customers/CUST_123456789ABC/verify",
+                json=sample_verification_request,
+                headers=verification_auth_headers
+            )
+        
+        assert response.status_code == status.HTTP_201_CREATED
+        data = response.json()
+        assert data["customer_id"] == "CUST_123456789ABC"
+        assert data["verification_type"] == "KYC"
+        assert data["status"] == "INITIATED"
+        assert data["provider"] == "test_provider"
+        assert "verification_id" in data
+        assert data["verification_id"].startswith("VER_")
+        
+        # Verify provider call was made
+        mock_provider_call.assert_called_once()
+    
+    @patch('customer_mastery.api.db_utils')
+    def test_initiate_verification_customer_not_found(self, mock_db_utils, client, verification_auth_headers, sample_verification_request):
+        """Test verification initiation when customer doesn't exist."""
+        mock_db_utils.get_customer_by_customer_id.return_value = None
+        
+        response = client.post(
+            "/api/v1/customers/NONEXISTENT/verify",
+            json=sample_verification_request,
+            headers=verification_auth_headers
+        )
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert "not found" in response.json()["detail"]
+    
+    @patch('customer_mastery.api.db_utils')
+    @patch('customer_mastery.api.get_fabric_gateway')
+    def test_get_verification_status_success(self, mock_gateway, mock_db_utils, 
+                                           client, verification_auth_headers, mock_db_customer):
+        """Test successful verification status retrieval."""
+        mock_db_utils.get_customer_by_customer_id.return_value = mock_db_customer
+        
+        # Mock blockchain query
+        mock_gateway_instance = AsyncMock()
+        mock_chaincode_client = AsyncMock()
+        mock_chaincode_client.query_chaincode.return_value = {
+            "payload": {
+                "verification_type": "KYC",
+                "status": "COMPLETED",
+                "provider": "test_provider",
+                "initiated_by": "verification_actor_001",
+                "initiated_at": "2024-01-01T00:00:00",
+                "completed_at": "2024-01-01T00:05:00",
+                "result_details": {
+                    "confidence_score": 0.95,
+                    "checks_passed": True
+                }
+            }
+        }
+        mock_gateway.return_value = mock_gateway_instance
+        
+        with patch('customer_mastery.api.ChaincodeClient', return_value=mock_chaincode_client):
+            response = client.get(
+                "/api/v1/customers/CUST_123456789ABC/verify/VER_123456789ABC",
+                headers=verification_auth_headers
+            )
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["customer_id"] == "CUST_123456789ABC"
+        assert data["verification_id"] == "VER_123456789ABC"
+        assert data["verification_type"] == "KYC"
+        assert data["status"] == "COMPLETED"
+    
+    @patch('customer_mastery.api.db_utils')
+    def test_get_verification_status_customer_not_found(self, mock_db_utils, client, verification_auth_headers):
+        """Test verification status retrieval when customer doesn't exist."""
+        mock_db_utils.get_customer_by_customer_id.return_value = None
+        
+        response = client.get(
+            "/api/v1/customers/NONEXISTENT/verify/VER_123456789ABC",
+            headers=verification_auth_headers
+        )
+        
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert "not found" in response.json()["detail"]
+    
+    @patch('customer_mastery.api.db_utils')
+    @patch('customer_mastery.api.get_fabric_gateway')
+    def test_update_verification_status_success(self, mock_gateway, mock_db_utils, 
+                                              client, verification_auth_headers, 
+                                              mock_db_customer, mock_db_actor):
+        """Test successful verification status update."""
+        # Setup mocks
+        mock_db_utils.get_customer_by_customer_id.return_value = mock_db_customer
+        mock_db_utils.get_actor_by_actor_id.return_value = mock_db_actor
+        
+        # Mock database session
+        mock_session = Mock()
+        mock_db_customer_query = Mock()
+        mock_db_customer_query.first.return_value = mock_db_customer
+        mock_session.query.return_value.filter.return_value = mock_db_customer_query
+        mock_db_utils.db_manager.session_scope.return_value.__enter__.return_value = mock_session
+        mock_db_utils.db_manager.session_scope.return_value.__exit__.return_value = None
+        
+        # Mock blockchain interaction
+        mock_gateway_instance = AsyncMock()
+        mock_chaincode_client = AsyncMock()
+        mock_chaincode_client.invoke_chaincode.return_value = {
+            "transaction_id": "tx_verification_update_123",
+            "status": "SUCCESS"
+        }
+        mock_gateway.return_value = mock_gateway_instance
+        
+        status_update = {
+            "status": "COMPLETED",
+            "result_details": {
+                "confidence_score": 0.95,
+                "checks_passed": True
+            },
+            "notes": "Verification completed successfully"
+        }
+        
+        with patch('customer_mastery.api.ChaincodeClient', return_value=mock_chaincode_client):
+            response = client.put(
+                "/api/v1/customers/CUST_123456789ABC/verify/VER_123456789ABC",
+                json=status_update,
+                headers=verification_auth_headers
+            )
+        
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["customer_id"] == "CUST_123456789ABC"
+        assert data["verification_id"] == "VER_123456789ABC"
+        assert data["status"] == "COMPLETED"
+    
+    def test_verification_unauthorized(self, client, sample_verification_request):
+        """Test verification operations without authentication."""
+        customer_id = "CUST_123456789ABC"
+        verification_id = "VER_123456789ABC"
+        
+        # Test POST
+        response = client.post(f"/api/v1/customers/{customer_id}/verify", json=sample_verification_request)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        
+        # Test GET
+        response = client.get(f"/api/v1/customers/{customer_id}/verify/{verification_id}")
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        
+        # Test PUT
+        status_update = {"status": "COMPLETED", "result_details": {}}
+        response = client.put(f"/api/v1/customers/{customer_id}/verify/{verification_id}", json=status_update)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+    
+    def test_verification_request_validation(self):
+        """Test verification request validation."""
+        from customer_mastery.api import IdentityVerificationRequest
+        
+        # Valid verification request
+        valid_request = {
+            "verification_type": "KYC",
+            "provider": "test_provider",
+            "additional_data": {"document_type": "passport"}
+        }
+        request = IdentityVerificationRequest(**valid_request)
+        assert request.verification_type == "KYC"
+        assert request.provider == "test_provider"
+        
+        # Test with minimal data
+        minimal_request = {"verification_type": "AML"}
+        request = IdentityVerificationRequest(**minimal_request)
+        assert request.verification_type == "AML"
+        assert request.provider == "default"
+        assert request.additional_data == {}
+    
+    def test_verification_id_generation(self):
+        """Test verification ID generation."""
+        from customer_mastery.api import _generate_verification_id
+        
+        verification_id = _generate_verification_id()
+        assert verification_id.startswith("VER_")
+        assert len(verification_id) == 16  # VER_ + 12 hex chars
+        
+        # Test uniqueness
+        verification_id2 = _generate_verification_id()
+        assert verification_id != verification_id2
