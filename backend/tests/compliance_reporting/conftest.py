@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import Mock, patch
 from datetime import datetime, timedelta
 
-from shared.database import ComplianceEventModel
+# from shared.database import ComplianceEventModel
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def compliance_mock_db_utils():
     
     # Configure common compliance database operations
     mock_db_utils.get_compliance_events_by_entity.return_value = []
-    mock_db_utils.create_compliance_event.return_value = Mock(spec=ComplianceEventModel)
+    mock_db_utils.create_compliance_event.return_value = Mock()  # spec=ComplianceEventModel
     mock_db_utils.get_compliance_events_by_date_range.return_value = []
     
     return mock_db_utils
