@@ -7,11 +7,12 @@ including creation, retrieval, status updates, approval/rejection, and history t
 
 import json
 import secrets
+import hashlib
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from enum import Enum
 
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, UploadFile, File, Form
 from pydantic import BaseModel, Field, validator
 import structlog
 
@@ -21,7 +22,7 @@ from shared.auth import (
     Actor, 
     Permission
 )
-from shared.database import db_utils, LoanApplicationModel, CustomerModel
+from shared.database import db_utils, LoanApplicationModel, CustomerModel, LoanDocumentModel
 from shared.fabric_gateway import get_fabric_gateway, ChaincodeClient, ChaincodeType
 
 logger = structlog.get_logger(__name__)
@@ -181,6 +182,43 @@ def _check_loan_access_permissions(loan: LoanApplicationModel, current_user: Act
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient permissions to access this loan application"
+        )
+
+
+def _calculate_file_hash(file_content: bytes) -> str:
+    """Calculate SHA256 hash of file content."""
+    return hashlib.sha256(file_content).hexdigest()
+
+
+def _generate_document_id() -> str:
+    """Generate a unique document ID."""
+    return f"DOC_{secrets.token_hex(8).upper()}"
+
+
+def _validate_file_upload(file: UploadFile) -> None:
+    """Validate uploaded file."""
+    # Check file size (10MB limit)
+    max_size = 10 * 1024 * 1024  # 10MB
+    if file.size and file.size > max_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File size exceeds 10MB limit"
+        )
+    
+    # Check file type (basic validation)
+    allowed_types = {
+        'application/pdf',
+        'image/jpeg',
+        'image/png',
+        'image/tiff',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    }
+    
+    if file.content_type and file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File type {file.content_type} not allowed"
         )
 
 
@@ -796,6 +834,63 @@ class AuditReportResponse(BaseModel):
     download_url: Optional[str] = None
 
 
+class DocumentType(str, Enum):
+    """Supported document types."""
+    IDENTITY = "IDENTITY"
+    INCOME_PROOF = "INCOME_PROOF"
+    BANK_STATEMENT = "BANK_STATEMENT"
+    COLLATERAL = "COLLATERAL"
+    OTHER = "OTHER"
+
+
+class DocumentStatus(str, Enum):
+    """Document verification status values."""
+    PENDING = "PENDING"
+    VERIFIED = "VERIFIED"
+    FAILED = "FAILED"
+    REJECTED = "REJECTED"
+
+
+class DocumentUploadRequest(BaseModel):
+    """Schema for document upload metadata."""
+    document_type: DocumentType = Field(..., description="Type of document")
+    document_name: str = Field(..., description="Name of the document")
+    
+    @validator('document_name')
+    def validate_document_name(cls, v):
+        """Validate document name."""
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Document name cannot be empty')
+        if len(v) > 255:
+            raise ValueError('Document name too long')
+        return v.strip()
+
+
+class LoanDocumentResponse(BaseModel):
+    """Schema for loan document response."""
+    id: int
+    loan_application_id: str
+    document_type: str
+    document_name: str
+    document_hash: str
+    file_size: Optional[int]
+    mime_type: Optional[str]
+    verification_status: str
+    uploaded_by_actor_id: int
+    blockchain_record_hash: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class DocumentStatusUpdate(BaseModel):
+    """Schema for updating document status."""
+    verification_status: DocumentStatus = Field(..., description="New verification status")
+    notes: Optional[str] = Field(None, description="Notes about the status change")
+
+
 @router.get("/{loan_id}/history", response_model=PaginatedLoanHistoryResponse)
 async def get_loan_history(
     loan_id: str,
@@ -1127,3 +1222,469 @@ async def _verify_history_integrity(history_record: 'LoanApplicationHistoryModel
                     record_id=history_record.id,
                     error=str(e))
         return False
+
+
+@router.post("/{loan_id}/documents", response_model=LoanDocumentResponse, status_code=status.HTTP_201_CREATED)
+async def upload_document(
+    loan_id: str,
+    file: UploadFile = File(...),
+    document_type: DocumentType = Form(...),
+    document_name: Optional[str] = Form(None),
+    current_user: Actor = Depends(require_permissions(Permission.MANAGE_LOAN_DOCUMENTS))
+):
+    """
+    Upload a document for a loan application.
+    
+    Uploads a document, calculates its hash for integrity verification,
+    and records the hash on the blockchain.
+    """
+    try:
+        logger.info("Uploading document for loan",
+                   loan_id=loan_id,
+                   document_type=document_type,
+                   filename=file.filename,
+                   actor_id=current_user.actor_id)
+        
+        # Validate loan exists
+        loan = _validate_loan_exists(loan_id)
+        
+        # Check access permissions
+        _check_loan_access_permissions(loan, current_user)
+        
+        # Validate file upload
+        _validate_file_upload(file)
+        
+        # Get current user's database record
+        db_actor = db_utils.get_actor_by_actor_id(current_user.actor_id)
+        if not db_actor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Actor not found in database"
+            )
+        
+        # Read file content and calculate hash
+        file_content = await file.read()
+        document_hash = _calculate_file_hash(file_content)
+        
+        # Use provided document name or file name
+        final_document_name = document_name or file.filename or f"document_{document_type.value.lower()}"
+        
+        # Prepare document data for database
+        document_data = {
+            "loan_application_id": loan.id,  # Use database ID for foreign key
+            "document_type": document_type.value,
+            "document_name": final_document_name,
+            "document_hash": document_hash,
+            "file_size": len(file_content),
+            "mime_type": file.content_type,
+            "verification_status": DocumentStatus.PENDING.value,
+            "uploaded_by_actor_id": db_actor.id
+        }
+        
+        # Create document record in database
+        db_document = db_utils.create_loan_document(document_data)
+        
+        # Record document hash on blockchain
+        try:
+            gateway = await get_fabric_gateway()
+            
+            # Get customer ID for blockchain record
+            customer = db_utils.get_customer_by_customer_id(loan.customer.customer_id)
+            
+            blockchain_data = {
+                "loanApplicationID": loan_id,
+                "customerID": customer.customer_id,
+                "documentType": document_type.value,
+                "documentName": final_document_name,
+                "documentHash": document_hash,
+                "actorID": current_user.actor_id
+            }
+            
+            blockchain_result = await gateway.invoke_chaincode(
+                "loan",
+                "RecordDocumentHash",
+                [
+                    loan_id,
+                    customer.customer_id,
+                    document_type.value,
+                    final_document_name,
+                    document_hash,
+                    current_user.actor_id
+                ]
+            )
+            
+            # Update document with blockchain record hash
+            if blockchain_result.get("transaction_id"):
+                db_utils.update_document_verification_status(
+                    db_document.id,
+                    DocumentStatus.PENDING.value,
+                    blockchain_result.get("transaction_id")
+                )
+            
+            logger.info("Document hash recorded on blockchain",
+                       loan_id=loan_id,
+                       document_id=db_document.id,
+                       transaction_id=blockchain_result.get("transaction_id"))
+            
+        except Exception as e:
+            logger.error("Failed to record document hash on blockchain",
+                        loan_id=loan_id,
+                        document_id=db_document.id,
+                        error=str(e))
+            # Continue with database record even if blockchain fails
+        
+        # Convert to response format
+        response_data = LoanDocumentResponse(
+            id=db_document.id,
+            loan_application_id=loan_id,
+            document_type=db_document.document_type,
+            document_name=db_document.document_name,
+            document_hash=db_document.document_hash,
+            file_size=db_document.file_size,
+            mime_type=db_document.mime_type,
+            verification_status=db_document.verification_status,
+            uploaded_by_actor_id=db_document.uploaded_by_actor_id,
+            blockchain_record_hash=db_document.blockchain_record_hash,
+            created_at=db_document.created_at,
+            updated_at=db_document.updated_at
+        )
+        
+        logger.info("Document uploaded successfully",
+                   loan_id=loan_id,
+                   document_id=db_document.id,
+                   document_hash=document_hash)
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to upload document", 
+                    loan_id=loan_id, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to upload document"
+        )
+
+
+@router.get("/{loan_id}/documents", response_model=List[LoanDocumentResponse])
+async def get_loan_documents(
+    loan_id: str,
+    document_type: Optional[DocumentType] = None,
+    verification_status: Optional[DocumentStatus] = None,
+    current_user: Actor = Depends(require_permissions(Permission.READ_LOAN_APPLICATION))
+):
+    """
+    Get all documents for a loan application.
+    
+    Returns a list of all documents associated with the loan application
+    with optional filtering by document type and verification status.
+    """
+    try:
+        logger.info("Retrieving documents for loan",
+                   loan_id=loan_id,
+                   document_type=document_type,
+                   verification_status=verification_status,
+                   actor_id=current_user.actor_id)
+        
+        # Validate loan exists
+        loan = _validate_loan_exists(loan_id)
+        
+        # Check access permissions
+        _check_loan_access_permissions(loan, current_user)
+        
+        # Get documents from database
+        documents = db_utils.get_loan_documents(loan_id)
+        
+        # Apply filters if specified
+        filtered_documents = documents
+        if document_type:
+            filtered_documents = [doc for doc in filtered_documents if doc.document_type == document_type.value]
+        
+        if verification_status:
+            filtered_documents = [doc for doc in filtered_documents if doc.verification_status == verification_status.value]
+        
+        # Convert to response format
+        response_data = []
+        for doc in filtered_documents:
+            response_data.append(LoanDocumentResponse(
+                id=doc.id,
+                loan_application_id=loan_id,
+                document_type=doc.document_type,
+                document_name=doc.document_name,
+                document_hash=doc.document_hash,
+                file_size=doc.file_size,
+                mime_type=doc.mime_type,
+                verification_status=doc.verification_status,
+                uploaded_by_actor_id=doc.uploaded_by_actor_id,
+                blockchain_record_hash=doc.blockchain_record_hash,
+                created_at=doc.created_at,
+                updated_at=doc.updated_at
+            ))
+        
+        logger.info("Documents retrieved successfully",
+                   loan_id=loan_id,
+                   total_documents=len(response_data))
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to retrieve documents", 
+                    loan_id=loan_id, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve documents"
+        )
+
+
+@router.put("/{loan_id}/documents/{document_id}/status", response_model=LoanDocumentResponse)
+async def update_document_status(
+    loan_id: str,
+    document_id: int,
+    status_update: DocumentStatusUpdate,
+    current_user: Actor = Depends(require_permissions(Permission.MANAGE_LOAN_DOCUMENTS))
+):
+    """
+    Update document verification status.
+    
+    Updates the verification status of a document and records the change
+    on the blockchain for audit trail purposes.
+    """
+    try:
+        logger.info("Updating document status",
+                   loan_id=loan_id,
+                   document_id=document_id,
+                   new_status=status_update.verification_status,
+                   actor_id=current_user.actor_id)
+        
+        # Validate loan exists
+        loan = _validate_loan_exists(loan_id)
+        
+        # Check access permissions
+        _check_loan_access_permissions(loan, current_user)
+        
+        # Validate document exists and belongs to the loan
+        document = db_utils.get_loan_document_by_id(document_id)
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} not found"
+            )
+        
+        if document.loan_application_id != loan.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Document does not belong to this loan application"
+            )
+        
+        # Validate status transition
+        old_status = document.verification_status
+        new_status = status_update.verification_status.value
+        
+        if old_status == new_status:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Document is already in {new_status} status"
+            )
+        
+        # Update status in database
+        success = db_utils.update_document_verification_status(
+            document_id,
+            new_status
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update document status in database"
+            )
+        
+        # Update blockchain record
+        try:
+            gateway = await get_fabric_gateway()
+            
+            # Generate a document ID for blockchain (using database ID)
+            blockchain_document_id = f"DOC_{document_id}"
+            
+            blockchain_result = await gateway.invoke_chaincode(
+                "loan",
+                "UpdateDocumentStatus",
+                [
+                    blockchain_document_id,
+                    new_status,
+                    current_user.actor_id,
+                    status_update.notes or ""
+                ]
+            )
+            
+            logger.info("Document status updated on blockchain",
+                       loan_id=loan_id,
+                       document_id=document_id,
+                       transaction_id=blockchain_result.get("transaction_id"))
+            
+        except Exception as e:
+            logger.error("Failed to update document status on blockchain",
+                        loan_id=loan_id,
+                        document_id=document_id,
+                        error=str(e))
+            # Continue with database update even if blockchain fails
+        
+        # Retrieve updated document
+        updated_document = db_utils.get_loan_document_by_id(document_id)
+        
+        response_data = LoanDocumentResponse(
+            id=updated_document.id,
+            loan_application_id=loan_id,
+            document_type=updated_document.document_type,
+            document_name=updated_document.document_name,
+            document_hash=updated_document.document_hash,
+            file_size=updated_document.file_size,
+            mime_type=updated_document.mime_type,
+            verification_status=updated_document.verification_status,
+            uploaded_by_actor_id=updated_document.uploaded_by_actor_id,
+            blockchain_record_hash=updated_document.blockchain_record_hash,
+            created_at=updated_document.created_at,
+            updated_at=updated_document.updated_at
+        )
+        
+        logger.info("Document status updated successfully",
+                   loan_id=loan_id,
+                   document_id=document_id,
+                   old_status=old_status,
+                   new_status=new_status)
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to update document status", 
+                    loan_id=loan_id, 
+                    document_id=document_id, 
+                    error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update document status"
+        )
+
+
+@router.post("/{loan_id}/documents/{document_id}/verify", response_model=Dict[str, Any])
+async def verify_document_hash(
+    loan_id: str,
+    document_id: int,
+    current_user: Actor = Depends(require_permissions(Permission.MANAGE_LOAN_DOCUMENTS))
+):
+    """
+    Verify document hash against blockchain record.
+    
+    Verifies that the document hash stored in the database matches
+    the hash recorded on the blockchain for integrity verification.
+    """
+    try:
+        logger.info("Verifying document hash",
+                   loan_id=loan_id,
+                   document_id=document_id,
+                   actor_id=current_user.actor_id)
+        
+        # Validate loan exists
+        loan = _validate_loan_exists(loan_id)
+        
+        # Check access permissions
+        _check_loan_access_permissions(loan, current_user)
+        
+        # Validate document exists and belongs to the loan
+        document = db_utils.get_loan_document_by_id(document_id)
+        if not document:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document {document_id} not found"
+            )
+        
+        if document.loan_application_id != loan.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Document does not belong to this loan application"
+            )
+        
+        # Verify hash against blockchain
+        verification_result = {
+            "document_id": document_id,
+            "loan_application_id": loan_id,
+            "document_hash": document.document_hash,
+            "verification_timestamp": datetime.utcnow().isoformat(),
+            "verified_by": current_user.actor_id,
+            "blockchain_verified": False,
+            "verification_details": {}
+        }
+        
+        try:
+            gateway = await get_fabric_gateway()
+            
+            # Generate blockchain document ID
+            blockchain_document_id = f"DOC_{document_id}"
+            
+            blockchain_result = await gateway.invoke_chaincode(
+                "loan",
+                "VerifyDocumentHash",
+                [
+                    blockchain_document_id,
+                    document.document_hash,
+                    current_user.actor_id
+                ]
+            )
+            
+            # Parse blockchain response
+            if blockchain_result.get("success"):
+                verification_result["blockchain_verified"] = True
+                verification_result["verification_details"] = {
+                    "blockchain_hash": blockchain_result.get("stored_hash"),
+                    "provided_hash": document.document_hash,
+                    "match": blockchain_result.get("hash_match", False),
+                    "transaction_id": blockchain_result.get("transaction_id")
+                }
+                
+                # Update document verification status if verified
+                if blockchain_result.get("hash_match"):
+                    db_utils.update_document_verification_status(
+                        document_id,
+                        DocumentStatus.VERIFIED.value
+                    )
+                else:
+                    db_utils.update_document_verification_status(
+                        document_id,
+                        DocumentStatus.FAILED.value
+                    )
+            else:
+                verification_result["verification_details"] = {
+                    "error": blockchain_result.get("error", "Unknown blockchain error")
+                }
+            
+            logger.info("Document hash verification completed",
+                       loan_id=loan_id,
+                       document_id=document_id,
+                       verified=verification_result["blockchain_verified"])
+            
+        except Exception as e:
+            logger.error("Failed to verify document hash on blockchain",
+                        loan_id=loan_id,
+                        document_id=document_id,
+                        error=str(e))
+            verification_result["verification_details"] = {
+                "error": f"Blockchain verification failed: {str(e)}"
+            }
+        
+        return verification_result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to verify document hash", 
+                    loan_id=loan_id, 
+                    document_id=document_id, 
+                    error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify document hash"
+        )
