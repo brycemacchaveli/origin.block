@@ -17,12 +17,17 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
     
     # Database
-    DATABASE_URL: str = "postgresql://user:password@localhost/blockchain_finance"
+    DATABASE_URL: str = "sqlite:///./blockchain_finance.db"
     
     # Blockchain
     FABRIC_GATEWAY_ENDPOINT: str = "localhost:7051"
     FABRIC_MSP_ID: str = "Org1MSP"
     FABRIC_CHANNEL_NAME: str = "mychannel"
+    FABRIC_PEER_ENDPOINT: str = "localhost:7051"
+    FABRIC_CA_ENDPOINT: str = "localhost:7054"
+    FABRIC_ADMIN_CERT_PATH: str = "./crypto/admin.pem"
+    FABRIC_ADMIN_KEY_PATH: str = "./crypto/admin-key.pem"
+    FABRIC_CA_CERT_PATH: str = "./crypto/ca.pem"
     
     # Security
     SECRET_KEY: str = "your-secret-key-here"
