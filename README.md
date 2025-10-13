@@ -1,4 +1,4 @@
-# Blockchain Financial Platform
+# origin.block
 
 A permissioned blockchain solution built on Hyperledger Fabric for legacy financial institutions, focusing on Loan Origination, Customer Mastery, and Compliance & Regulatory Reporting.
 
