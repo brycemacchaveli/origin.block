@@ -39,8 +39,12 @@ def mock_db_session():
 def mock_db_manager(mock_db_session):
     """Mock database manager for testing."""
     manager = Mock()
-    manager.session_scope.return_value.__enter__.return_value = mock_db_session
-    manager.session_scope.return_value.__exit__.return_value = None
+    # Create a proper context manager mock
+    context_manager = Mock()
+    context_manager.__enter__ = Mock(return_value=mock_db_session)
+    context_manager.__exit__ = Mock(return_value=None)
+    manager.session_scope.return_value = context_manager
+    manager.health_check.return_value = True
     return manager
 
 
