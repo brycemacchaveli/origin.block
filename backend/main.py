@@ -7,10 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from customer_mastery.api import router as customer_router
 from loan_origination.api import router as loan_router
 from compliance_reporting.api import router as compliance_router
+from event_listener.api import get_consistency_router
 from shared.config import settings
 
 app = FastAPI(
-    title="Blockchain Financial Platform API",
+    title="origin.block FastAPI backend",
     description="API services for blockchain-based financial operations",
     version="1.0.0",
 )
@@ -28,6 +29,7 @@ app.add_middleware(
 app.include_router(customer_router, prefix="/api/v1/customers", tags=["customers"])
 app.include_router(loan_router, prefix="/api/v1/loans", tags=["loans"])
 app.include_router(compliance_router, prefix="/api/v1/compliance", tags=["compliance"])
+app.include_router(get_consistency_router(), prefix="/api/v1", tags=["consistency"])
 
 @app.get("/")
 async def root():

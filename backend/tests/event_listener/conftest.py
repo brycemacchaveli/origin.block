@@ -1,109 +1,126 @@
 """
-Event Listener service-specific test configuration and fixtures.
+Test configuration for event listener tests.
 """
-
 import pytest
-from unittest.mock import Mock, patch, AsyncMock
+import asyncio
+import sys
+import os
+from unittest.mock import Mock, patch
 from datetime import datetime
-import json
+
+from shared.database import db_manager, ActorModel, CustomerModel, LoanApplicationModel
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create an instance of the default event loop for the test session."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
 
 
 @pytest.fixture
-def event_listener_mock_db_utils():
-    """Mock database utilities specifically for event listener tests."""
-    mock_db_utils = Mock()
-    
-    # Configure common event listener database operations
-    mock_db_utils.create_customer_history.return_value = True
-    mock_db_utils.create_loan_history.return_value = True
-    mock_db_utils.create_compliance_event.return_value = Mock()
-    
-    return mock_db_utils
+def mock_db_session():
+    """Mock database session for testing."""
+    session = Mock()
+    session.add = Mock()
+    session.commit = Mock()
+    session.rollback = Mock()
+    session.close = Mock()
+    session.query = Mock()
+    session.flush = Mock()
+    session.refresh = Mock()
+    session.expunge = Mock()
+    session.expunge_all = Mock()
+    return session
 
 
 @pytest.fixture
-def sample_blockchain_event():
-    """Sample blockchain event data."""
-    return {
-        "event_type": "CUSTOMER_CREATED",
-        "transaction_id": "tx_123456789",
-        "block_number": 100,
-        "timestamp": datetime.utcnow().isoformat(),
-        "payload": {
-            "customer_id": "CUST_123456789ABC",
-            "actor_id": "customer_service_001",
-            "action": "CREATE",
-            "data": {
-                "first_name": "John",
-                "last_name": "Doe",
-                "kyc_status": "PENDING"
-            }
-        }
-    }
+def mock_db_manager(mock_db_session):
+    """Mock database manager for testing."""
+    manager = Mock()
+    # Create a proper context manager mock
+    context_manager = Mock()
+    context_manager.__enter__ = Mock(return_value=mock_db_session)
+    context_manager.__exit__ = Mock(return_value=None)
+    manager.session_scope.return_value = context_manager
+    manager.health_check.return_value = True
+    return manager
 
 
 @pytest.fixture
-def sample_loan_event():
-    """Sample loan blockchain event data."""
-    return {
-        "event_type": "LOAN_STATUS_CHANGED",
-        "transaction_id": "tx_987654321",
-        "block_number": 101,
-        "timestamp": datetime.utcnow().isoformat(),
-        "payload": {
-            "loan_application_id": "LOAN_123456",
-            "actor_id": "underwriter_001",
-            "action": "STATUS_CHANGE",
-            "previous_status": "SUBMITTED",
-            "new_status": "UNDERWRITING"
-        }
-    }
+def sample_actor():
+    """Sample actor for testing."""
+    return ActorModel(
+        id=1,
+        actor_id='ACTOR001',
+        actor_type='Internal_User',
+        actor_name='Test Actor',
+        role='Underwriter',
+        blockchain_identity='cert123',
+        permissions=['read', 'write'],
+        is_active=True,
+        created_at=datetime(2024, 1, 1, 9, 0, 0),
+        updated_at=datetime(2024, 1, 1, 9, 0, 0)
+    )
 
 
 @pytest.fixture
-def sample_compliance_event():
-    """Sample compliance blockchain event data."""
-    return {
-        "event_type": "COMPLIANCE_CHECK",
-        "transaction_id": "tx_555666777",
-        "block_number": 102,
-        "timestamp": datetime.utcnow().isoformat(),
-        "payload": {
-            "entity_type": "CUSTOMER",
-            "entity_id": "CUST_123456789ABC",
-            "check_type": "AML_SCREENING",
-            "result": "CLEAR",
-            "actor_id": "system"
-        }
-    }
+def sample_customer():
+    """Sample customer for testing."""
+    return CustomerModel(
+        id=1,
+        customer_id='CUST001',
+        first_name='John',
+        last_name='Doe',
+        date_of_birth=datetime(1990, 1, 1),
+        national_id_hash='hashed_id',
+        address='123 Main St',
+        contact_email='john.doe@example.com',
+        contact_phone='+1234567890',
+        kyc_status='PENDING',
+        aml_status='PENDING',
+        consent_preferences={'dataSharing': True},
+        created_by_actor_id=1,
+        created_at=datetime(2024, 1, 1, 10, 0, 0),
+        updated_at=datetime(2024, 1, 1, 10, 0, 0)
+    )
 
 
 @pytest.fixture
-def mock_blockchain_listener():
-    """Mock blockchain event listener."""
-    listener = AsyncMock()
-    listener.start_listening.return_value = None
-    listener.stop_listening.return_value = None
-    listener.is_listening = True
-    return listener
+def sample_loan_application():
+    """Sample loan application for testing."""
+    return LoanApplicationModel(
+        id=1,
+        loan_application_id='LOAN001',
+        customer_id=1,
+        application_date=datetime(2024, 1, 1, 11, 0, 0),
+        requested_amount=50000.0,
+        loan_type='Personal',
+        application_status='SUBMITTED',
+        introducer_id='INTRO001',
+        current_owner_actor_id=1,
+        created_by_actor_id=1,
+        created_at=datetime(2024, 1, 1, 11, 0, 0),
+        updated_at=datetime(2024, 1, 1, 11, 0, 0)
+    )
 
 
 @pytest.fixture
-def mock_event_processor():
-    """Mock event processor."""
-    with patch('event_listener.service.EventProcessor') as mock_processor:
-        processor_instance = AsyncMock()
-        processor_instance.process_event.return_value = True
-        mock_processor.return_value = processor_instance
-        yield processor_instance
+def mock_fabric_gateway():
+    """Mock Fabric Gateway for testing."""
+    gateway = Mock()
+    gateway.connect = Mock()
+    gateway.disconnect = Mock()
+    gateway.invoke_chaincode = Mock()
+    gateway.query_chaincode = Mock()
+    return gateway
 
 
-@pytest.fixture
-def mock_fabric_event_stream():
-    """Mock Fabric event stream."""
-    with patch('event_listener.service.FabricEventStream') as mock_stream:
-        stream_instance = AsyncMock()
-        stream_instance.subscribe.return_value = None
-        stream_instance.unsubscribe.return_value = None
-        mock_stream.return_value = stream_instance
-        yield stream_instance
+@pytest.fixture(autouse=True)
+def setup_test_environment():
+    """Setup test environment with mocked dependencies."""
+    with patch('event_listener.service.get_fabric_gateway') as mock_get_gateway:
+        mock_gateway = Mock()
+        mock_get_gateway.return_value = mock_gateway
+        yield mock_gateway
