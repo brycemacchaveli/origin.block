@@ -1239,3 +1239,54 @@ class EventListenerService:
 
 # Global service instance
 event_listener = EventListenerService()
+
+# Import consistency checking functionality
+try:
+    from .consistency_checker import consistency_checker
+    from .consistency_monitoring import consistency_monitor
+    
+    # Add consistency checking integration
+    async def initialize_consistency_checking():
+        """Initialize consistency checking components."""
+        try:
+            await consistency_checker.initialize()
+            logger.info("Consistency checker initialized")
+        except Exception as e:
+            logger.error("Failed to initialize consistency checker", error=str(e))
+    
+    # Add method to event listener service for consistency checks
+    def add_consistency_methods_to_event_listener():
+        """Add consistency checking methods to the event listener service."""
+        
+        async def perform_consistency_check(self, entity_types: Optional[List[str]] = None):
+            """Perform data consistency check."""
+            return await consistency_checker.perform_full_reconciliation(entity_types)
+        
+        async def manual_resync(self, entity_type: str, entity_id: str, force_overwrite: bool = False):
+            """Manually resync an entity."""
+            return await consistency_checker.manual_resync_entity(entity_type, entity_id, force_overwrite)
+        
+        def get_consistency_summary(self):
+            """Get consistency summary."""
+            return consistency_checker.get_inconsistency_summary()
+        
+        def get_active_alerts(self):
+            """Get active consistency alerts."""
+            return consistency_monitor.get_active_alerts()
+        
+        async def generate_integrity_report(self):
+            """Generate comprehensive integrity report."""
+            return await consistency_checker.generate_integrity_report()
+        
+        # Add methods to the EventListenerService class
+        EventListenerService.perform_consistency_check = perform_consistency_check
+        EventListenerService.manual_resync = manual_resync
+        EventListenerService.get_consistency_summary = get_consistency_summary
+        EventListenerService.get_active_alerts = get_active_alerts
+        EventListenerService.generate_integrity_report = generate_integrity_report
+    
+    # Apply the methods
+    add_consistency_methods_to_event_listener()
+    
+except ImportError as e:
+    logger.warning("Consistency checking not available", error=str(e))
