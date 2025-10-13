@@ -1,6 +1,6 @@
 module github.com/blockchain-financial-platform/fabric-chaincode/compliance
 
-go 1.23
+go 1.21
 
 require (
 	github.com/blockchain-financial-platform/fabric-chaincode/shared v0.0.0
@@ -8,6 +8,8 @@ require (
 	github.com/hyperledger/fabric-protos-go v0.0.0-20220827195505-ce4c067a561d
 	github.com/stretchr/testify v1.8.4
 )
+
+replace github.com/blockchain-financial-platform/fabric-chaincode/shared => ../shared
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -21,5 +23,3 @@ require (
 	google.golang.org/protobuf v1.28.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/blockchain-financial-platform/fabric-chaincode/shared => ../shared
