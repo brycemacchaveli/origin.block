@@ -11,9 +11,11 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
 from enum import Enum
+import traceback
 
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError
 
 from shared.fabric_gateway import get_fabric_gateway, FabricError
 from shared.database import (
@@ -72,6 +74,21 @@ class EventParsingError(Exception):
     pass
 
 
+class DatabaseSyncError(Exception):
+    """Raised when database synchronization fails."""
+    pass
+
+
+class RetryableError(Exception):
+    """Raised when an operation should be retried."""
+    pass
+
+
+class NonRetryableError(Exception):
+    """Raised when an operation should not be retried."""
+    pass
+
+
 class EventProcessor:
     """Processes blockchain events and updates database."""
     
@@ -101,9 +118,14 @@ class EventProcessor:
             EventType.SANCTION_SCREENING_COMPLETED: self._handle_sanction_screening_completed,
         }
     
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((RetryableError, OperationalError, SQLAlchemyError))
+    )
     async def process_event(self, event: BlockchainEvent) -> bool:
         """
-        Process a blockchain event and update database.
+        Process a blockchain event and update database with retry logic.
         
         Args:
             event: The blockchain event to process
@@ -122,7 +144,7 @@ class EventProcessor:
                        transaction_id=event.transaction_id,
                        chaincode=event.chaincode_name)
             
-            await handler(event)
+            await self._process_event_with_error_handling(handler, event)
             
             logger.info("Successfully processed blockchain event",
                        event_type=event.event_type.value,
@@ -130,107 +152,206 @@ class EventProcessor:
             
             return True
             
-        except Exception as e:
-            logger.error("Failed to process blockchain event",
+        except NonRetryableError as e:
+            logger.error("Non-retryable error processing blockchain event",
                         event_type=event.event_type.value,
                         transaction_id=event.transaction_id,
                         error=str(e))
             return False
+        except Exception as e:
+            logger.error("Failed to process blockchain event",
+                        event_type=event.event_type.value,
+                        transaction_id=event.transaction_id,
+                        error=str(e),
+                        traceback=traceback.format_exc())
+            # Convert to retryable error for retry mechanism
+            raise RetryableError(f"Database sync failed: {e}") from e
+    
+    async def _process_event_with_error_handling(self, handler: Callable, event: BlockchainEvent):
+        """Process event with comprehensive error handling."""
+        try:
+            await handler(event)
+        except IntegrityError as e:
+            # Handle duplicate key violations and constraint violations
+            if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+                logger.warning("Duplicate record detected, skipping",
+                             event_type=event.event_type.value,
+                             transaction_id=event.transaction_id)
+                # This is not an error - event was already processed
+                return
+            else:
+                # Other integrity errors should be retried
+                raise RetryableError(f"Database integrity error: {e}") from e
+        except OperationalError as e:
+            # Database connection issues - should be retried
+            logger.warning("Database operational error, will retry",
+                          error=str(e),
+                          event_type=event.event_type.value)
+            raise RetryableError(f"Database operational error: {e}") from e
+        except SQLAlchemyError as e:
+            # Other SQLAlchemy errors - should be retried
+            logger.warning("SQLAlchemy error, will retry",
+                          error=str(e),
+                          event_type=event.event_type.value)
+            raise RetryableError(f"SQLAlchemy error: {e}") from e
+        except ValueError as e:
+            # Data validation errors - should not be retried
+            logger.error("Data validation error",
+                        error=str(e),
+                        event_type=event.event_type.value,
+                        payload=event.payload)
+            raise NonRetryableError(f"Data validation error: {e}") from e
+        except KeyError as e:
+            # Missing required fields - should not be retried
+            logger.error("Missing required field in event payload",
+                        error=str(e),
+                        event_type=event.event_type.value,
+                        payload=event.payload)
+            raise NonRetryableError(f"Missing required field: {e}") from e
     
     # Customer event handlers
     async def _handle_customer_created(self, event: BlockchainEvent):
-        """Handle customer creation event."""
+        """Handle customer creation event with comprehensive error handling."""
         payload = event.payload
         
-        # Get or create actor
-        actor = await self._get_or_create_actor(payload.get('actorID'))
+        # Validate required fields
+        required_fields = ['customerID', 'firstName', 'lastName']
+        for field in required_fields:
+            if not payload.get(field):
+                raise ValueError(f"Missing required field: {field}")
         
-        customer_data = {
-            'customer_id': payload.get('customerID'),
-            'first_name': payload.get('firstName', ''),
-            'last_name': payload.get('lastName', ''),
-            'date_of_birth': self._parse_datetime(payload.get('dateOfBirth')),
-            'national_id_hash': payload.get('nationalID'),
-            'address': payload.get('address'),
-            'contact_email': payload.get('contactEmail'),
-            'contact_phone': payload.get('contactPhone'),
-            'kyc_status': payload.get('kycStatus', 'PENDING'),
-            'aml_status': payload.get('amlStatus', 'PENDING'),
-            'consent_preferences': payload.get('consentPreferences'),
-            'created_by_actor_id': actor.id,
-            'created_at': event.timestamp
-        }
-        
-        customer = db_utils.create_customer(customer_data)
-        
-        # Create history record
-        # Convert datetime objects to strings for JSON serialization
-        customer_data_serializable = {k: v.isoformat() if isinstance(v, datetime) else v 
-                                     for k, v in customer_data.items()}
-        
-        history_data = {
-            'customer_id': customer.id,
-            'change_type': 'CREATE',
-            'new_value': json.dumps(customer_data_serializable),
-            'changed_by_actor_id': actor.id,
-            'blockchain_transaction_id': event.transaction_id,
-            'timestamp': event.timestamp
-        }
-        
-        with db_manager.session_scope() as session:
-            history = CustomerHistoryModel(**history_data)
-            session.add(history)
+        try:
+            # Get or create actor
+            actor = await self._get_or_create_actor(payload.get('actorID'))
+            if not actor:
+                raise ValueError("Failed to get or create actor")
+            
+            # Check if customer already exists
+            existing_customer = db_utils.get_customer_by_customer_id(payload.get('customerID'))
+            if existing_customer:
+                logger.info("Customer already exists, skipping creation",
+                           customer_id=payload.get('customerID'))
+                return
+            
+            customer_data = {
+                'customer_id': payload.get('customerID'),
+                'first_name': payload.get('firstName', ''),
+                'last_name': payload.get('lastName', ''),
+                'date_of_birth': self._parse_datetime(payload.get('dateOfBirth')),
+                'national_id_hash': payload.get('nationalID'),
+                'address': payload.get('address'),
+                'contact_email': payload.get('contactEmail'),
+                'contact_phone': payload.get('contactPhone'),
+                'kyc_status': payload.get('kycStatus', 'PENDING'),
+                'aml_status': payload.get('amlStatus', 'PENDING'),
+                'consent_preferences': payload.get('consentPreferences'),
+                'created_by_actor_id': actor.id,
+                'created_at': event.timestamp
+            }
+            
+            customer = db_utils.create_customer(customer_data)
+            
+            # Create history record
+            # Convert datetime objects to strings for JSON serialization
+            customer_data_serializable = {k: v.isoformat() if isinstance(v, datetime) else v 
+                                         for k, v in customer_data.items()}
+            
+            history_data = {
+                'customer_id': customer.id,
+                'change_type': 'CREATE',
+                'new_value': json.dumps(customer_data_serializable),
+                'changed_by_actor_id': actor.id,
+                'blockchain_transaction_id': event.transaction_id,
+                'timestamp': event.timestamp
+            }
+            
+            with db_manager.session_scope() as session:
+                history = CustomerHistoryModel(**history_data)
+                session.add(history)
+                
+            logger.info("Customer created successfully",
+                       customer_id=customer.customer_id,
+                       database_id=customer.id)
+                       
+        except Exception as e:
+            logger.error("Failed to handle customer creation event",
+                        customer_id=payload.get('customerID'),
+                        error=str(e))
+            raise DatabaseSyncError(f"Customer creation failed: {e}") from e
     
     async def _handle_customer_updated(self, event: BlockchainEvent):
-        """Handle customer update event."""
+        """Handle customer update event with comprehensive error handling."""
         payload = event.payload
         customer_id = payload.get('customerID')
         
-        # Get or create actor
-        actor = await self._get_or_create_actor(payload.get('actorID'))
+        if not customer_id:
+            raise ValueError("Missing required field: customerID")
         
-        with db_manager.session_scope() as session:
-            customer = session.query(CustomerModel).filter(
-                CustomerModel.customer_id == customer_id
-            ).first()
+        try:
+            # Get or create actor
+            actor = await self._get_or_create_actor(payload.get('actorID'))
+            if not actor:
+                raise ValueError("Failed to get or create actor")
             
-            if not customer:
-                logger.warning("Customer not found for update", customer_id=customer_id)
-                return
-            
-            # Update customer fields
-            old_values = {}
-            new_values = {}
-            
-            update_fields = ['firstName', 'lastName', 'address', 'contactEmail', 
-                           'contactPhone', 'kycStatus', 'amlStatus']
-            
-            for field in update_fields:
-                if field in payload:
-                    db_field = self._camel_to_snake(field)
-                    old_value = getattr(customer, db_field)
-                    new_value = payload[field]
+            with db_manager.session_scope() as session:
+                customer = session.query(CustomerModel).filter(
+                    CustomerModel.customer_id == customer_id
+                ).first()
+                
+                if not customer:
+                    logger.warning("Customer not found for update, creating new customer",
+                                 customer_id=customer_id)
+                    # If customer doesn't exist, create it
+                    await self._handle_customer_created(event)
+                    return
+                
+                # Update customer fields
+                old_values = {}
+                new_values = {}
+                
+                update_fields = ['firstName', 'lastName', 'address', 'contactEmail', 
+                               'contactPhone', 'kycStatus', 'amlStatus']
+                
+                for field in update_fields:
+                    if field in payload:
+                        db_field = self._camel_to_snake(field)
+                        old_value = getattr(customer, db_field)
+                        new_value = payload[field]
+                        
+                        if old_value != new_value:
+                            old_values[db_field] = old_value
+                            new_values[db_field] = new_value
+                            setattr(customer, db_field, new_value)
+                
+                if old_values:  # Only update if there are changes
+                    customer.updated_at = event.timestamp
                     
-                    if old_value != new_value:
-                        old_values[db_field] = old_value
-                        new_values[db_field] = new_value
-                        setattr(customer, db_field, new_value)
-            
-            customer.updated_at = event.timestamp
-            
-            # Create history record for each changed field
-            for field, old_value in old_values.items():
-                history = CustomerHistoryModel(
-                    customer_id=customer.id,
-                    change_type='UPDATE',
-                    field_name=field,
-                    old_value=str(old_value) if old_value else None,
-                    new_value=str(new_values[field]) if new_values[field] else None,
-                    changed_by_actor_id=actor.id,
-                    blockchain_transaction_id=event.transaction_id,
-                    timestamp=event.timestamp
-                )
-                session.add(history)
+                    # Create history record for each changed field
+                    for field, old_value in old_values.items():
+                        history = CustomerHistoryModel(
+                            customer_id=customer.id,
+                            change_type='UPDATE',
+                            field_name=field,
+                            old_value=str(old_value) if old_value else None,
+                            new_value=str(new_values[field]) if new_values[field] else None,
+                            changed_by_actor_id=actor.id,
+                            blockchain_transaction_id=event.transaction_id,
+                            timestamp=event.timestamp
+                        )
+                        session.add(history)
+                    
+                    logger.info("Customer updated successfully",
+                               customer_id=customer_id,
+                               updated_fields=list(old_values.keys()))
+                else:
+                    logger.debug("No changes detected for customer update",
+                               customer_id=customer_id)
+                               
+        except Exception as e:
+            logger.error("Failed to handle customer update event",
+                        customer_id=customer_id,
+                        error=str(e))
+            raise DatabaseSyncError(f"Customer update failed: {e}") from e
     
     async def _handle_consent_recorded(self, event: BlockchainEvent):
         """Handle consent recording event."""
@@ -324,81 +445,144 @@ class EventProcessor:
     
     # Loan event handlers
     async def _handle_loan_application_submitted(self, event: BlockchainEvent):
-        """Handle loan application submission event."""
+        """Handle loan application submission event with comprehensive error handling."""
         payload = event.payload
         
-        # Get or create actor
-        actor = await self._get_or_create_actor(payload.get('actorID'))
+        # Validate required fields
+        required_fields = ['loanApplicationID', 'customerID', 'requestedAmount', 'loanType']
+        for field in required_fields:
+            if not payload.get(field):
+                raise ValueError(f"Missing required field: {field}")
         
-        # Get customer
-        customer = db_utils.get_customer_by_customer_id(payload.get('customerID'))
-        if not customer:
-            logger.warning("Customer not found for loan application", 
-                          customer_id=payload.get('customerID'))
-            return
-        
-        loan_data = {
-            'loan_application_id': payload.get('loanApplicationID'),
-            'customer_id': customer.id,
-            'application_date': self._parse_datetime(payload.get('applicationDate')) or event.timestamp,
-            'requested_amount': float(payload.get('requestedAmount', 0)),
-            'loan_type': payload.get('loanType'),
-            'application_status': payload.get('applicationStatus', 'SUBMITTED'),
-            'introducer_id': payload.get('introducerID'),
-            'current_owner_actor_id': actor.id,
-            'created_by_actor_id': actor.id,
-            'created_at': event.timestamp
-        }
-        
-        loan = db_utils.create_loan_application(loan_data)
-        
-        # Create history record
-        with db_manager.session_scope() as session:
-            history = LoanApplicationHistoryModel(
-                loan_application_id=loan.id,
-                change_type='CREATE',
-                new_status='SUBMITTED',
-                changed_by_actor_id=actor.id,
-                blockchain_transaction_id=event.transaction_id,
-                timestamp=event.timestamp,
-                notes='Loan application submitted'
-            )
-            session.add(history)
-    
-    async def _handle_loan_application_status_updated(self, event: BlockchainEvent):
-        """Handle loan application status update event."""
-        payload = event.payload
-        loan_id = payload.get('loanApplicationID')
-        
-        # Get or create actor
-        actor = await self._get_or_create_actor(payload.get('actorID'))
-        
-        with db_manager.session_scope() as session:
-            loan = session.query(LoanApplicationModel).filter(
-                LoanApplicationModel.loan_application_id == loan_id
-            ).first()
+        try:
+            # Get or create actor
+            actor = await self._get_or_create_actor(payload.get('actorID'))
+            if not actor:
+                raise ValueError("Failed to get or create actor")
             
-            if not loan:
-                logger.warning("Loan application not found for status update", loan_id=loan_id)
+            # Check if loan application already exists
+            existing_loan = db_utils.get_loan_by_loan_id(payload.get('loanApplicationID'))
+            if existing_loan:
+                logger.info("Loan application already exists, skipping creation",
+                           loan_id=payload.get('loanApplicationID'))
                 return
             
-            old_status = loan.application_status
-            new_status = payload.get('newStatus')
+            # Get customer
+            customer = db_utils.get_customer_by_customer_id(payload.get('customerID'))
+            if not customer:
+                raise ValueError(f"Customer not found: {payload.get('customerID')}")
             
-            loan.application_status = new_status
-            loan.updated_at = event.timestamp
+            # Validate requested amount
+            try:
+                requested_amount = float(payload.get('requestedAmount', 0))
+                if requested_amount <= 0:
+                    raise ValueError("Requested amount must be positive")
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Invalid requested amount: {payload.get('requestedAmount')}")
+            
+            loan_data = {
+                'loan_application_id': payload.get('loanApplicationID'),
+                'customer_id': customer.id,
+                'application_date': self._parse_datetime(payload.get('applicationDate')) or event.timestamp,
+                'requested_amount': requested_amount,
+                'loan_type': payload.get('loanType'),
+                'application_status': payload.get('applicationStatus', 'SUBMITTED'),
+                'introducer_id': payload.get('introducerID'),
+                'current_owner_actor_id': actor.id,
+                'created_by_actor_id': actor.id,
+                'created_at': event.timestamp
+            }
+            
+            loan = db_utils.create_loan_application(loan_data)
             
             # Create history record
-            history = LoanApplicationHistoryModel(
-                loan_application_id=loan.id,
-                change_type='STATUS_CHANGE',
-                previous_status=old_status,
-                new_status=new_status,
-                changed_by_actor_id=actor.id,
-                blockchain_transaction_id=event.transaction_id,
-                timestamp=event.timestamp
-            )
-            session.add(history)
+            with db_manager.session_scope() as session:
+                history = LoanApplicationHistoryModel(
+                    loan_application_id=loan.id,
+                    change_type='CREATE',
+                    new_status='SUBMITTED',
+                    changed_by_actor_id=actor.id,
+                    blockchain_transaction_id=event.transaction_id,
+                    timestamp=event.timestamp,
+                    notes='Loan application submitted'
+                )
+                session.add(history)
+                
+            logger.info("Loan application created successfully",
+                       loan_id=loan.loan_application_id,
+                       customer_id=customer.customer_id,
+                       requested_amount=requested_amount)
+                       
+        except Exception as e:
+            logger.error("Failed to handle loan application submission event",
+                        loan_id=payload.get('loanApplicationID'),
+                        customer_id=payload.get('customerID'),
+                        error=str(e))
+            raise DatabaseSyncError(f"Loan application submission failed: {e}") from e
+    
+    async def _handle_loan_application_status_updated(self, event: BlockchainEvent):
+        """Handle loan application status update event with comprehensive error handling."""
+        payload = event.payload
+        loan_id = payload.get('loanApplicationID')
+        new_status = payload.get('newStatus')
+        
+        # Validate required fields
+        if not loan_id:
+            raise ValueError("Missing required field: loanApplicationID")
+        if not new_status:
+            raise ValueError("Missing required field: newStatus")
+        
+        try:
+            # Get or create actor
+            actor = await self._get_or_create_actor(payload.get('actorID'))
+            if not actor:
+                raise ValueError("Failed to get or create actor")
+            
+            with db_manager.session_scope() as session:
+                loan = session.query(LoanApplicationModel).filter(
+                    LoanApplicationModel.loan_application_id == loan_id
+                ).first()
+                
+                if not loan:
+                    logger.warning("Loan application not found for status update",
+                                 loan_id=loan_id)
+                    raise ValueError(f"Loan application not found: {loan_id}")
+                
+                old_status = loan.application_status
+                
+                # Only update if status actually changed
+                if old_status != new_status:
+                    loan.application_status = new_status
+                    loan.updated_at = event.timestamp
+                    
+                    # Create history record
+                    history = LoanApplicationHistoryModel(
+                        loan_application_id=loan.id,
+                        change_type='STATUS_CHANGE',
+                        previous_status=old_status,
+                        new_status=new_status,
+                        changed_by_actor_id=actor.id,
+                        blockchain_transaction_id=event.transaction_id,
+                        timestamp=event.timestamp,
+                        notes=payload.get('notes', f'Status changed from {old_status} to {new_status}')
+                    )
+                    session.add(history)
+                    
+                    logger.info("Loan application status updated successfully",
+                               loan_id=loan_id,
+                               old_status=old_status,
+                               new_status=new_status)
+                else:
+                    logger.debug("No status change detected for loan application",
+                               loan_id=loan_id,
+                               status=new_status)
+                               
+        except Exception as e:
+            logger.error("Failed to handle loan application status update event",
+                        loan_id=loan_id,
+                        new_status=new_status,
+                        error=str(e))
+            raise DatabaseSyncError(f"Loan status update failed: {e}") from e
     
     async def _handle_loan_application_approved(self, event: BlockchainEvent):
         """Handle loan application approval event."""
@@ -553,49 +737,96 @@ class EventProcessor:
         await self._create_compliance_event_record(event, 'SANCTION_SCREENING')
     
     async def _create_compliance_event_record(self, event: BlockchainEvent, event_type: str):
-        """Create a compliance event record in the database."""
+        """Create a compliance event record in the database with comprehensive error handling."""
         payload = event.payload
         
-        # Get or create actor
-        actor = await self._get_or_create_actor(payload.get('actorID'))
-        
-        event_data = {
-            'event_id': payload.get('eventID') or f"{event.transaction_id}_{event_type}",
-            'event_type': event_type,
-            'rule_id': payload.get('ruleID'),
-            'affected_entity_type': payload.get('affectedEntityType', 'UNKNOWN'),
-            'affected_entity_id': payload.get('affectedEntityID', ''),
-            'severity': payload.get('severity', 'INFO'),
-            'description': payload.get('details', event.event_type.value),
-            'details': payload,
-            'is_alerted': payload.get('isAlerted', False),
-            'actor_id': actor.id,
-            'blockchain_transaction_id': event.transaction_id,
-            'timestamp': event.timestamp
-        }
-        
-        db_utils.create_compliance_event(event_data)
+        try:
+            # Get or create actor
+            actor = await self._get_or_create_actor(payload.get('actorID'))
+            if not actor:
+                raise ValueError("Failed to get or create actor")
+            
+            # Generate unique event ID if not provided
+            event_id = payload.get('eventID') or f"{event.transaction_id}_{event_type}_{event.timestamp.isoformat()}"
+            
+            # Validate affected entity type and ID
+            affected_entity_type = payload.get('affectedEntityType', 'UNKNOWN')
+            affected_entity_id = payload.get('affectedEntityID', '')
+            
+            if affected_entity_type != 'UNKNOWN' and not affected_entity_id:
+                logger.warning("Missing affected entity ID for compliance event",
+                             event_type=event_type,
+                             affected_entity_type=affected_entity_type)
+            
+            event_data = {
+                'event_id': event_id,
+                'event_type': event_type,
+                'rule_id': payload.get('ruleID'),
+                'affected_entity_type': affected_entity_type,
+                'affected_entity_id': affected_entity_id,
+                'severity': payload.get('severity', 'INFO'),
+                'description': payload.get('details', event.event_type.value),
+                'details': payload,
+                'is_alerted': payload.get('isAlerted', False),
+                'actor_id': actor.id,
+                'blockchain_transaction_id': event.transaction_id,
+                'timestamp': event.timestamp
+            }
+            
+            # Check if compliance event already exists
+            with db_manager.session_scope() as session:
+                existing_event = session.query(ComplianceEventModel).filter(
+                    ComplianceEventModel.event_id == event_id
+                ).first()
+                
+                if existing_event:
+                    logger.info("Compliance event already exists, skipping creation",
+                               event_id=event_id)
+                    return
+            
+            compliance_event = db_utils.create_compliance_event(event_data)
+            
+            logger.info("Compliance event created successfully",
+                       event_id=compliance_event.event_id,
+                       event_type=event_type,
+                       severity=event_data['severity'])
+                       
+        except Exception as e:
+            logger.error("Failed to create compliance event record",
+                        event_type=event_type,
+                        transaction_id=event.transaction_id,
+                        error=str(e))
+            raise DatabaseSyncError(f"Compliance event creation failed: {e}") from e
     
     # Utility methods
-    async def _get_or_create_actor(self, actor_id: str) -> ActorModel:
-        """Get or create an actor by actor_id."""
-        if not actor_id:
-            # Create a system actor for events without actor info
-            actor_id = "SYSTEM"
-        
-        actor = db_utils.get_actor_by_actor_id(actor_id)
-        if not actor:
-            # Create a new actor with minimal information
-            actor_data = {
-                'actor_id': actor_id,
-                'actor_type': 'System' if actor_id == 'SYSTEM' else 'Unknown',
-                'actor_name': actor_id,
-                'role': 'System' if actor_id == 'SYSTEM' else 'Unknown',
-                'is_active': True
-            }
-            actor = db_utils.create_actor(actor_data)
-        
-        return actor
+    async def _get_or_create_actor(self, actor_id: str) -> Optional[ActorModel]:
+        """Get or create an actor by actor_id with error handling."""
+        try:
+            if not actor_id:
+                # Create a system actor for events without actor info
+                actor_id = "SYSTEM"
+            
+            actor = db_utils.get_actor_by_actor_id(actor_id)
+            if not actor:
+                # Create a new actor with minimal information
+                actor_data = {
+                    'actor_id': actor_id,
+                    'actor_type': 'System' if actor_id == 'SYSTEM' else 'Unknown',
+                    'actor_name': actor_id,
+                    'role': 'System' if actor_id == 'SYSTEM' else 'Unknown',
+                    'is_active': True
+                }
+                actor = db_utils.create_actor(actor_data)
+                logger.info("Created new actor", actor_id=actor_id, actor_type=actor_data['actor_type'])
+            
+            return actor
+            
+        except Exception as e:
+            logger.error("Failed to get or create actor",
+                        actor_id=actor_id,
+                        error=str(e))
+            # Return None to let the caller handle the error
+            return None
     
     def _parse_datetime(self, date_str: Optional[str]) -> Optional[datetime]:
         """Parse datetime string to datetime object."""
@@ -712,6 +943,14 @@ class EventListenerService:
         self.chaincodes = ['customer', 'loan', 'compliance']
         self.event_subscriptions: Dict[str, Any] = {}
         self.processed_events: set = set()  # Track processed events to avoid duplicates
+        self.failed_events: List[Dict[str, Any]] = []  # Track failed events for retry
+        self.sync_stats = {
+            'total_events': 0,
+            'successful_events': 0,
+            'failed_events': 0,
+            'duplicate_events': 0,
+            'last_sync_time': None
+        }
     
     async def start(self):
         """Start the event listener service."""
@@ -794,7 +1033,7 @@ class EventListenerService:
     
     async def process_raw_event(self, raw_event: Dict[str, Any]) -> bool:
         """
-        Process a raw blockchain event.
+        Process a raw blockchain event with comprehensive error handling and statistics.
         
         This method can be called directly for testing or when events
         are received from external sources.
@@ -805,16 +1044,21 @@ class EventListenerService:
         Returns:
             True if event was processed successfully
         """
+        self.sync_stats['total_events'] += 1
+        
         try:
             # Parse the event
             event = self.event_parser.parse_event(raw_event)
             if not event:
+                logger.warning("Failed to parse event", raw_event=raw_event)
+                self.sync_stats['failed_events'] += 1
                 return False
             
             # Check for duplicates
             event_key = f"{event.transaction_id}_{event.event_type.value}"
             if event_key in self.processed_events:
                 logger.debug("Skipping duplicate event", event_key=event_key)
+                self.sync_stats['duplicate_events'] += 1
                 return True
             
             # Process the event
@@ -822,20 +1066,38 @@ class EventListenerService:
             
             if success:
                 self.processed_events.add(event_key)
+                self.sync_stats['successful_events'] += 1
+                self.sync_stats['last_sync_time'] = datetime.utcnow()
+                
                 # Limit the size of processed events set
                 if len(self.processed_events) > 10000:
                     # Remove oldest 1000 entries
                     old_events = list(self.processed_events)[:1000]
                     for old_event in old_events:
                         self.processed_events.discard(old_event)
+            else:
+                self.sync_stats['failed_events'] += 1
+                # Store failed event for potential retry
+                self.failed_events.append({
+                    'raw_event': raw_event,
+                    'event_key': event_key,
+                    'failed_at': datetime.utcnow(),
+                    'retry_count': 0
+                })
+                
+                # Limit failed events list size
+                if len(self.failed_events) > 1000:
+                    self.failed_events = self.failed_events[-500:]  # Keep last 500
             
             return success
             
         except EventParsingError as e:
-            logger.error("Event parsing failed", error=str(e))
+            logger.error("Event parsing failed", error=str(e), raw_event=raw_event)
+            self.sync_stats['failed_events'] += 1
             return False
         except Exception as e:
-            logger.error("Unexpected error processing event", error=str(e))
+            logger.error("Unexpected error processing event", error=str(e), raw_event=raw_event)
+            self.sync_stats['failed_events'] += 1
             return False
     
     def get_supported_event_types(self) -> List[str]:
@@ -848,6 +1110,131 @@ class EventListenerService:
             chaincode: chaincode in self.event_subscriptions 
             for chaincode in self.chaincodes
         }
+    
+    async def retry_failed_events(self, max_retries: int = 3) -> Dict[str, int]:
+        """
+        Retry processing of failed events.
+        
+        Args:
+            max_retries: Maximum number of retry attempts per event
+            
+        Returns:
+            Dictionary with retry statistics
+        """
+        retry_stats = {
+            'attempted': 0,
+            'successful': 0,
+            'failed': 0,
+            'skipped': 0
+        }
+        
+        if not self.failed_events:
+            return retry_stats
+        
+        logger.info("Starting retry of failed events", failed_count=len(self.failed_events))
+        
+        # Create a copy of failed events to iterate over
+        events_to_retry = self.failed_events.copy()
+        self.failed_events.clear()
+        
+        for failed_event_info in events_to_retry:
+            retry_stats['attempted'] += 1
+            
+            # Check if we've exceeded max retries
+            if failed_event_info['retry_count'] >= max_retries:
+                retry_stats['skipped'] += 1
+                logger.warning("Skipping event after max retries",
+                             event_key=failed_event_info['event_key'],
+                             retry_count=failed_event_info['retry_count'])
+                continue
+            
+            # Increment retry count
+            failed_event_info['retry_count'] += 1
+            
+            # Attempt to process the event again
+            success = await self.process_raw_event(failed_event_info['raw_event'])
+            
+            if success:
+                retry_stats['successful'] += 1
+                logger.info("Successfully retried failed event",
+                           event_key=failed_event_info['event_key'],
+                           retry_count=failed_event_info['retry_count'])
+            else:
+                retry_stats['failed'] += 1
+                # Add back to failed events if not exceeded max retries
+                if failed_event_info['retry_count'] < max_retries:
+                    self.failed_events.append(failed_event_info)
+        
+        logger.info("Completed retry of failed events", **retry_stats)
+        return retry_stats
+    
+    def get_sync_statistics(self) -> Dict[str, Any]:
+        """Get database synchronization statistics."""
+        stats = self.sync_stats.copy()
+        stats['failed_events_pending'] = len(self.failed_events)
+        stats['processed_events_cached'] = len(self.processed_events)
+        
+        # Calculate success rate
+        if stats['total_events'] > 0:
+            stats['success_rate'] = stats['successful_events'] / stats['total_events']
+        else:
+            stats['success_rate'] = 0.0
+        
+        return stats
+    
+    def reset_statistics(self):
+        """Reset synchronization statistics."""
+        self.sync_stats = {
+            'total_events': 0,
+            'successful_events': 0,
+            'failed_events': 0,
+            'duplicate_events': 0,
+            'last_sync_time': None
+        }
+        logger.info("Synchronization statistics reset")
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Perform health check of the event listener service.
+        
+        Returns:
+            Dictionary with health status information
+        """
+        health_status = {
+            'service_running': self.running,
+            'database_healthy': False,
+            'subscriptions_active': 0,
+            'recent_sync_activity': False,
+            'failed_events_count': len(self.failed_events),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        try:
+            # Check database health
+            health_status['database_healthy'] = db_manager.health_check()
+            
+            # Check subscription status
+            subscription_status = self.get_subscription_status()
+            health_status['subscriptions_active'] = sum(subscription_status.values())
+            
+            # Check recent sync activity (within last 5 minutes)
+            if self.sync_stats['last_sync_time']:
+                time_since_last_sync = datetime.utcnow() - self.sync_stats['last_sync_time']
+                health_status['recent_sync_activity'] = time_since_last_sync.total_seconds() < 300
+            
+            # Overall health assessment
+            health_status['overall_healthy'] = (
+                health_status['service_running'] and
+                health_status['database_healthy'] and
+                health_status['failed_events_count'] < 100  # Threshold for too many failures
+            )
+            
+        except Exception as e:
+            logger.error("Error during health check", error=str(e))
+            health_status['error'] = str(e)
+            health_status['overall_healthy'] = False
+        
+        return health_status
 
 
 # Global service instance
