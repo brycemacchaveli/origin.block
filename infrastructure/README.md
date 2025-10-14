@@ -1,4 +1,4 @@
-# Blockchain Financial Platform - Infrastructure
+# origin.block - Infrastructure
 
 Complete infrastructure setup and deployment guide for the Hyperledger Fabric blockchain network supporting compliance, customer mastery, and loan origination domains.
 
