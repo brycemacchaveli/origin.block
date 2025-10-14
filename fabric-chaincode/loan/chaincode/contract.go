@@ -3,7 +3,7 @@ package chaincode
 import (
 	"github.com/hyperledger/fabric-chaincode-go/shim"
 	"github.com/hyperledger/fabric-protos-go/peer"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/chaincode"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/chaincode"
 )
 
 // LoanContract implements the chaincode interface

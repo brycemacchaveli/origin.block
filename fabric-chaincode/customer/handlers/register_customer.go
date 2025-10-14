@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/hyperledger/fabric-chaincode-go/shim"
-	"github.com/blockchain-financial-platform/fabric-chaincode/customer/domain"
-	customerServices "github.com/blockchain-financial-platform/fabric-chaincode/customer/services"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/config"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/services"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/utils"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/validation"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/customer/domain"
+	customerServices "github.com/brycemacchaveli/origin.block/fabric-chaincode/customer/services"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/config"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/services"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/utils"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/validation"
 )
 
 // CustomerHandler handles customer-related operations

@@ -3,7 +3,7 @@ package domain
 import (
 	"time"
 	
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/validation"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/validation"
 )
 
 // LoanApplication represents a loan application entity

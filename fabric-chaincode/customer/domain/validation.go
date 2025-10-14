@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 	
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/validation"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/validation"
 )
 
 // ValidateCustomer validates a customer entity

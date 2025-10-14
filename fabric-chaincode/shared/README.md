@@ -292,7 +292,7 @@ This implementation addresses the following requirements:
 These utilities are designed to be imported and used by all domain-specific chaincodes:
 
 ```go
-import "github.com/blockchain-financial-platform/fabric-chaincode/shared"
+import "github.com/brycemacchaveli/origin.block/fabric-chaincode/shared"
 
 // Use in chaincode functions
 func CreateCustomer(stub shim.ChaincodeStubInterface, args []string) peer.Response {

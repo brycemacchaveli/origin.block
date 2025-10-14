@@ -8,9 +8,9 @@ import (
 	"github.com/hyperledger/fabric-chaincode-go/shim"
 	"github.com/hyperledger/fabric-chaincode-go/shimtest"
 	"github.com/stretchr/testify/assert"
-	"github.com/blockchain-financial-platform/fabric-chaincode/customer/chaincode"
-	"github.com/blockchain-financial-platform/fabric-chaincode/customer/domain"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/validation"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/customer/chaincode"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/customer/domain"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/validation"
 )
 
 func TestKYCFlow(t *testing.T) {

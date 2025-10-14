@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hyperledger/fabric-chaincode-go/shim"
-	"github.com/blockchain-financial-platform/fabric-chaincode/compliance/handlers"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/compliance/handlers"
 )
 
 // Router handles function routing for the compliance chaincode

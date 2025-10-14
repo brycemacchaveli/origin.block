@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/hyperledger/fabric-chaincode-go/shim"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/interfaces"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/utils"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/interfaces"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/utils"
 )
 
 // BaseEventService provides common event emission functionality

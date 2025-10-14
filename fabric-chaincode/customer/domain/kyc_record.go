@@ -3,7 +3,7 @@ package domain
 import (
 	"time"
 	
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/validation"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/validation"
 )
 
 // KYCRecord represents a KYC verification record

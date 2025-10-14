@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/hyperledger/fabric-chaincode-go/shim"
-	"github.com/blockchain-financial-platform/fabric-chaincode/shared/interfaces"
+	"github.com/brycemacchaveli/origin.block/fabric-chaincode/shared/interfaces"
 )
 
 // PersistenceService provides data persistence operations
