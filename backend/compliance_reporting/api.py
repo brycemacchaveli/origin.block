@@ -10,19 +10,19 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func
 
-from ..shared.database import (
+from shared.database import (
     get_db_session, 
     ComplianceEventModel, 
     ActorModel,
     CustomerModel,
     LoanApplicationModel
 )
-from ..shared.auth import (
+from shared.auth import (
     get_current_user, 
     require_permissions, 
     require_roles,
@@ -30,7 +30,7 @@ from ..shared.auth import (
     Permission, 
     Role
 )
-from ..shared.fabric_gateway import get_fabric_gateway, ChaincodeClient, ChaincodeType
+from shared.fabric_gateway import get_fabric_gateway, ChaincodeClient, ChaincodeType
 import structlog
 
 logger = structlog.get_logger(__name__)
