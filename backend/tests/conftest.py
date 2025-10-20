@@ -44,6 +44,15 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "database: mark test as requiring database"
     )
+    config.addinivalue_line(
+        "markers", "workflow: mark test as end-to-end workflow test"
+    )
+    config.addinivalue_line(
+        "markers", "cross_domain: mark test as cross-domain integration test"
+    )
+    config.addinivalue_line(
+        "markers", "data_utilities: mark test as test data management utility"
+    )
 
 
 # Test collection configuration
@@ -65,3 +74,11 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.compliance_reporting)
         elif "shared" in str(item.fspath):
             item.add_marker(pytest.mark.shared)
+        
+        # Add specific integration test markers
+        if "workflow" in str(item.fspath):
+            item.add_marker(pytest.mark.workflow)
+        elif "cross_domain" in str(item.fspath):
+            item.add_marker(pytest.mark.cross_domain)
+        elif "data_utilities" in str(item.fspath):
+            item.add_marker(pytest.mark.data_utilities)
