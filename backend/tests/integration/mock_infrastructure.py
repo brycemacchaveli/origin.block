@@ -400,12 +400,143 @@ class MockDatabaseModels:
             self.application_date = kwargs.get('application_date', datetime.now())
 
 
+class MockDatabaseUtilities:
+    """Mock database utilities for testing."""
+    
+    def __init__(self):
+        self.db_manager = MagicMock()
+        self._actors = {}
+        self._customers = {}
+        self._history = {}
+        
+        # Mock the session_scope context manager
+        @contextmanager
+        def mock_session_scope():
+            mock_session = MagicMock()
+            yield mock_session
+        
+        self.db_manager.session_scope = mock_session_scope
+    
+    def get_actor_by_actor_id(self, actor_id: str):
+        """Mock get actor by actor ID."""
+        if actor_id not in self._actors:
+            # Create a mock actor using a simple object instead of SQLAlchemy model
+            class MockActor:
+                def __init__(self):
+                    self.id = 1
+                    self.actor_id = actor_id
+                    self.actor_type = "Internal_User"
+                    self.actor_name = "Test Actor"
+                    self.role = "Underwriter"
+                    self.is_active = True
+                    self.created_at = datetime.now()
+                    self.updated_at = datetime.now()
+            
+            self._actors[actor_id] = MockActor()
+        
+        return self._actors[actor_id]
+    
+    def create_actor(self, actor_data: Dict[str, Any]):
+        """Mock create actor."""
+        actor_count = len(self._actors)
+        
+        class MockActor:
+            def __init__(self):
+                self.id = actor_count + 1
+                self.actor_id = actor_data.get('actor_id', 'TEST_ACTOR')
+                self.actor_type = actor_data.get('actor_type', 'Internal_User')
+                self.actor_name = actor_data.get('actor_name', 'Test Actor')
+                self.role = actor_data.get('role', 'Underwriter')
+                self.is_active = True
+                self.created_at = datetime.now()
+                self.updated_at = datetime.now()
+        
+        mock_actor = MockActor()
+        self._actors[mock_actor.actor_id] = mock_actor
+        return mock_actor
+    
+    def create_customer(self, customer_data: Dict[str, Any]):
+        """Mock create customer."""
+        customer_count = len(self._customers)
+        customer_id = customer_data.get('customer_id', f'CUST_MOCK_{customer_count + 1:03d}')
+        
+        class MockCustomer:
+            def __init__(self):
+                self.id = customer_count + 1
+                self.customer_id = customer_id
+                self.first_name = customer_data.get('first_name', 'Mock')
+                self.last_name = customer_data.get('last_name', 'Customer')
+                self.national_id_hash = customer_data.get('national_id_hash', 'mock_hash')
+                self.kyc_status = 'PENDING'
+                self.aml_status = 'PENDING'
+                self.created_at = datetime.now()
+                self.updated_at = datetime.now()
+        
+        mock_customer = MockCustomer()
+        self._customers[mock_customer.customer_id] = mock_customer
+        return mock_customer
+    
+    def get_customer_by_customer_id(self, customer_id: str):
+        """Mock get customer by customer ID."""
+        if customer_id not in self._customers:
+            # Create a mock customer if it doesn't exist (for loan validation)
+            customer_count = len(self._customers)
+            
+            class MockCustomer:
+                def __init__(self):
+                    self.id = customer_count + 1
+                    self.customer_id = customer_id
+                    self.first_name = "Mock"
+                    self.last_name = "Customer"
+                    self.national_id_hash = "mock_hash"
+                    self.kyc_status = "VERIFIED"
+                    self.aml_status = "CLEARED"
+                    self.created_at = datetime.now()
+                    self.updated_at = datetime.now()
+            
+            mock_customer = MockCustomer()
+            self._customers[customer_id] = mock_customer
+        
+        return self._customers.get(customer_id)
+    
+    def get_customer_history(self, customer_id: str):
+        """Mock get customer history."""
+        return self._history.get(customer_id, [])
+    
+    def create_loan_application(self, loan_data: Dict[str, Any]):
+        """Mock create loan application."""
+        loan_count = len(self._customers)  # Use customers count for simplicity
+        loan_id = loan_data.get('loan_application_id', f'LOAN_MOCK_{loan_count + 1:03d}')
+        
+        class MockLoanApplication:
+            def __init__(self):
+                self.id = loan_count + 1
+                self.loan_application_id = loan_id
+                self.customer_id = loan_data.get('customer_id', 'CUST_MOCK_001')
+                self.requested_amount = loan_data.get('requested_amount', 25000.0)
+                self.loan_type = loan_data.get('loan_type', 'PERSONAL')
+                self.introducer_id = loan_data.get('introducer_id', 'INTRO_MOCK_001')
+                self.application_status = 'SUBMITTED'
+                self.application_date = datetime.now()
+                self.current_owner_actor_id = loan_data.get('current_owner_actor_id', 1)
+                self.approval_amount = None
+                self.rejection_reason = None
+                self.blockchain_record_hash = None
+                self.created_by_actor_id = loan_data.get('created_by_actor_id', 1)
+                self.created_at = datetime.now()
+                self.updated_at = datetime.now()
+        
+        mock_loan = MockLoanApplication()
+        return mock_loan
+
+
 class IntegrationTestMockManager:
     """Manages all mocks for integration tests."""
     
     def __init__(self):
         self.fabric_gateway = MockFabricGateway()
         self.external_services = MockExternalServices()
+        self.database_utilities = MockDatabaseUtilities()
         self.active_patches = []
     
     @contextmanager
@@ -415,12 +546,13 @@ class IntegrationTestMockManager:
         from shared.auth import require_permissions, require_roles, Permission, Role
         from shared.database import get_db_session
         
-        # Create a mock actor for authentication
+        # Create a mock actor for authentication with all permissions
         mock_actor = Actor(
             actor_id="TEST_ACTOR", 
             actor_type="Internal_User", 
             actor_name="Test Actor", 
-            role=Role.UNDERWRITER
+            role=Role.UNDERWRITER,
+            permissions=set(Permission)  # Grant all permissions for testing
         )
         
         # Create mock database session
@@ -436,32 +568,40 @@ class IntegrationTestMockManager:
         # Store original dependencies
         original_dependencies = app.dependency_overrides.copy()
         
-        # Override all auth-related dependencies
-        app.dependency_overrides[require_permissions(Permission.CREATE_CUSTOMER)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.READ_CUSTOMER)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.UPDATE_CUSTOMER)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.READ_CUSTOMER_HISTORY)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.MANAGE_CUSTOMER_CONSENT)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.CREATE_LOAN_APPLICATION)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.READ_LOAN_APPLICATION)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.UPDATE_LOAN_APPLICATION)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.APPROVE_LOAN)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.REJECT_LOAN)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.READ_COMPLIANCE_EVENTS)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.CREATE_COMPLIANCE_RULE)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.UPDATE_COMPLIANCE_RULE)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.GENERATE_REGULATORY_REPORT)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.ACCESS_REGULATORY_VIEW)] = override_auth
-        app.dependency_overrides[require_permissions(Permission.MANAGE_LOAN_DOCUMENTS)] = override_auth
-        app.dependency_overrides[require_roles(Role.REGULATOR)] = override_auth
+        # Override the base authentication dependency - this will handle all permission checks
+        from shared.auth import get_current_user
+        app.dependency_overrides[get_current_user] = override_auth
         app.dependency_overrides[get_db_session] = override_db
+        
+        # Create a mock chaincode client that has the invoke_chaincode method
+        mock_chaincode_client = MagicMock()
+        
+        async def mock_invoke_chaincode(*args, **kwargs):
+            return {
+                "transaction_id": "mock_tx_123",
+                "status": "SUCCESS",
+                "payload": json.dumps({"result": "success"})
+            }
+        
+        mock_chaincode_client.invoke_chaincode = mock_invoke_chaincode
+        
+        # Mock the ChaincodeClient constructor to return our mock
+        def mock_chaincode_client_constructor(gateway, chaincode_type):
+            return mock_chaincode_client
         
         patches = [
             patch('shared.fabric_gateway.get_fabric_gateway', return_value=self.fabric_gateway),
+            patch('shared.fabric_gateway.ChaincodeClient', side_effect=mock_chaincode_client_constructor),
+            patch('customer_mastery.api.ChaincodeClient', side_effect=mock_chaincode_client_constructor),
+            patch('loan_origination.api.ChaincodeClient', side_effect=mock_chaincode_client_constructor),
             patch('customer_mastery.api._simulate_identity_provider_call', 
                   side_effect=self.external_services.mock_kyc_provider),
-            patch('loan_origination.api._validate_customer_exists', 
-                  return_value=MockDatabaseModels.MockCustomerModel()),
+            # Remove this patch since we're mocking db_utils instead
+            # patch('loan_origination.api._validate_customer_exists', 
+            #       return_value=MockDatabaseModels.MockCustomerModel()),
+            patch('shared.database.db_utils', self.database_utilities),
+            patch('customer_mastery.api.db_utils', self.database_utilities),
+            patch('loan_origination.api.db_utils', self.database_utilities),
         ]
         
         # Start all patches
