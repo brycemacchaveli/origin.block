@@ -40,3 +40,8 @@ black==23.11.0
 isort==5.12.0
 flake8==6.1.0
 mypy==1.7.1
+
+# Data warehousing and ETL
+google-cloud-bigquery==3.13.0
+pandas==2.1.4
+pytz==2023.3
