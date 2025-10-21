@@ -59,8 +59,7 @@ class ComplianceEventResponse(BaseModel):
     blockchain_transaction_id: Optional[str]
     timestamp: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class ComplianceEventSummary(BaseModel):

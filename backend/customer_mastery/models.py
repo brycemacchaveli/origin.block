@@ -65,8 +65,7 @@ class CustomerResponse(CustomerBase):
     # Exclude sensitive fields
     national_id: Optional[str] = Field(None, exclude=True)
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class CustomerHistoryResponse(BaseModel):
@@ -80,8 +79,7 @@ class CustomerHistoryResponse(BaseModel):
     blockchain_transaction_id: Optional[str] = Field(None, description="Blockchain transaction ID")
     timestamp: datetime = Field(..., description="Change timestamp")
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class ConsentPreferences(BaseModel):
@@ -92,8 +90,7 @@ class ConsentPreferences(BaseModel):
     third_party_sharing: bool = Field(False, description="Consent for third-party data sharing")
     retention_period: Optional[int] = Field(None, description="Data retention period in months")
     
-    class Config:
-        extra = "allow"  # Allow additional consent fields
+    model_config = {"extra": "allow"}  # Allow additional consent fields
 
 
 class ConsentResponse(BaseModel):

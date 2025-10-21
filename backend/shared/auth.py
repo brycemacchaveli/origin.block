@@ -7,7 +7,7 @@ and blockchain identity mapping for secure API access.
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set, Union
 from enum import Enum
 
@@ -89,11 +89,10 @@ class Actor(BaseModel):
     blockchain_identity: Optional[str] = Field(None, description="x.509 Certificate ID for blockchain operations")
     permissions: Set[Permission] = Field(default_factory=set, description="Set of permissions granted to the actor")
     is_active: bool = Field(True, description="Whether the actor is active")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
-    class Config:
-        use_enum_values = True
+    model_config = {"use_enum_values": True}
         
     def __init__(self, **data):
         """Initialize Actor with proper enum handling."""
@@ -115,7 +114,7 @@ class TokenData(BaseModel):
     role: str = Field(..., description="Actor role")
     permissions: List[str] = Field(default_factory=list, description="List of permissions")
     exp: datetime = Field(..., description="Expiration time")
-    iat: datetime = Field(default_factory=datetime.utcnow, description="Issued at time")
+    iat: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Issued at time")
 
 
 # Role-based permission mapping
@@ -242,9 +241,9 @@ class JWTManager:
             JWT token string
         """
         if expires_delta:
-            expire = datetime.utcnow() + expires_delta
+            expire = datetime.now(timezone.utc) + expires_delta
         else:
-            expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+            expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         
         # Handle both enum and string values
         actor_type_value = actor.actor_type.value if hasattr(actor.actor_type, 'value') else actor.actor_type
@@ -265,7 +264,7 @@ class JWTManager:
         payload = token_data.model_dump()
         # Convert datetime objects to timestamps
         payload["exp"] = int(expire.timestamp())
-        payload["iat"] = int(datetime.utcnow().timestamp())
+        payload["iat"] = int(datetime.now(timezone.utc).timestamp())
         
         token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
         
@@ -390,7 +389,7 @@ class ActorManager:
             if hasattr(actor, key):
                 setattr(actor, key, value)
         
-        actor.updated_at = datetime.utcnow()
+        actor.updated_at = datetime.now(timezone.utc)
         
         logger.info("Updated actor", actor_id=actor_id)
         
@@ -563,7 +562,7 @@ class BlockchainIdentityMapper:
         actor = actor_manager.get_actor(actor_id)
         if actor:
             actor.blockchain_identity = cert_id
-            actor.updated_at = datetime.utcnow()
+            actor.updated_at = datetime.now(timezone.utc)
         
         logger.info("Mapped actor to blockchain identity", actor_id=actor_id, cert_id=cert_id)
     
@@ -580,7 +579,7 @@ class BlockchainIdentityMapper:
             actor = actor_manager.get_actor(actor_id)
             if actor:
                 actor.blockchain_identity = None
-                actor.updated_at = datetime.utcnow()
+                actor.updated_at = datetime.now(timezone.utc)
             
             logger.info("Removed blockchain identity mapping", actor_id=actor_id)
             return True

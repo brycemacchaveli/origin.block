@@ -106,8 +106,7 @@ class LoanApplicationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class LoanHistoryResponse(BaseModel):
@@ -124,8 +123,7 @@ class LoanHistoryResponse(BaseModel):
     timestamp: datetime
     notes: Optional[str]
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 class DocumentType(str, Enum):
     """Supported document types."""
@@ -215,8 +213,7 @@ class LoanDocumentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class DocumentStatusUpdate(BaseModel):
