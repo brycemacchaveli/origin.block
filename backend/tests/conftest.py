@@ -53,6 +53,18 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "data_utilities: mark test as test data management utility"
     )
+    config.addinivalue_line(
+        "markers", "customer_mastery: mark test as customer mastery domain test"
+    )
+    config.addinivalue_line(
+        "markers", "loan_origination: mark test as loan origination domain test"
+    )
+    config.addinivalue_line(
+        "markers", "compliance_reporting: mark test as compliance reporting domain test"
+    )
+    config.addinivalue_line(
+        "markers", "shared: mark test as shared utilities test"
+    )
 
 
 # Test collection configuration
