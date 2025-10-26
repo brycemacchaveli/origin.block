@@ -16,6 +16,7 @@ type Router struct {
 func NewRouter() *Router {
 	customerHandler := handlers.NewCustomerHandler()
 	kycHandler := handlers.NewKYCHandler()
+	cdpHandler := handlers.NewCDPHandler()
 	
 	return &Router{
 		handlers: map[string]func(shim.ChaincodeStubInterface, []string) ([]byte, error){
@@ -33,6 +34,13 @@ func NewRouter() *Router {
 			"InitiateAMLCheck":    kycHandler.InitiateAMLCheck,
 			"UpdateAMLStatus":     kycHandler.UpdateAMLStatus,
 			"GetAMLRecord":        kycHandler.GetAMLRecord,
+			
+			// CDP functions
+			"GenerateCDP":          cdpHandler.GenerateCDP,
+			"GetCDP":               cdpHandler.GetCDP,
+			"ValidateCDP":          cdpHandler.ValidateCDP,
+			"RevokeCDP":            cdpHandler.RevokeCDP,
+			"GetCustomerCurrentCDP": cdpHandler.GetCustomerCurrentCDP,
 			
 			// Query functions
 			"QueryCustomersByStatus": customerHandler.QueryCustomersByStatus,

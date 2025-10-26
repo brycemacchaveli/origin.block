@@ -22,6 +22,10 @@ type Customer struct {
 	LastUpdated     time.Time                  `json:"lastUpdated"`
 	CreatedBy       string                     `json:"createdBy"`
 	LastUpdatedBy   string                     `json:"lastUpdatedBy"`
+	
+	// CDP (Canonical Data Passport) fields
+	CurrentCDPID    string   `json:"currentCDPID,omitempty"`
+	CDPHistory      []string `json:"cdpHistory,omitempty"` // Historical CDP IDs
 }
 
 // CustomerRegistrationRequest represents a customer registration request
